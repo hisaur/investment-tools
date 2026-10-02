@@ -166,8 +166,13 @@ def parse_csv_holdings(csv_path: str = DEFAULT_CSV_PATH) -> List[Dict[str, Any]]
                         "total_cost": 0.0,
                         "currency": curr,
                         "buy_count": 0,
-                        "sell_count": 0
+                        "sell_count": 0,
+                        "brokers": set()
                     }
+
+                raw_broker = (row.get("Broker") or "").strip()
+                if raw_broker:
+                    trades_by_symbol[sym]["brokers"].add(raw_broker)
 
                 if ttype == "BUY":
                     trades_by_symbol[sym]["shares"] += qty
@@ -190,7 +195,8 @@ def parse_csv_holdings(csv_path: str = DEFAULT_CSV_PATH) -> List[Dict[str, Any]]
                     "market_value": round(d["shares"] * avg_cost, 2),
                     "currency": d["currency"],
                     "buy_count": d["buy_count"],
-                    "sell_count": d["sell_count"]
+                    "sell_count": d["sell_count"],
+                    "brokers": sorted(list(d["brokers"])) if d["brokers"] else ["Manual"]
                 })
         return holdings
     except Exception as e:
@@ -214,11 +220,20 @@ def format_holdings_markdown(holdings: List[Dict[str, Any]], is_online: bool, ur
         lines.append("*No active holdings found in synced CSV.*")
         return "\n".join(lines)
 
-    lines.append("| Ticker | Shares | Avg Cost | Est. Market Value | Currency |")
-    lines.append("| :--- | :---: | :---: | :---: | :---: |")
-    for h in holdings:
-        weight = (h["market_value"] / total_val * 100) if total_val > 0 else 0.0
-        lines.append(f"| **{h['ticker']}** | {h['shares']} | ${h['avg_cost']:.2f} | ${h['market_value']:,.2f} ({weight:.1f}%) | {h['currency']} |")
+    has_brokers = any(h.get("brokers") and h["brokers"] != ["Manual"] for h in holdings)
+    if has_brokers:
+        lines.append("| Ticker | Shares | Avg Cost | Est. Market Value | Currency | Broker(s) |")
+        lines.append("| :--- | :---: | :---: | :---: | :---: | :--- |")
+        for h in holdings:
+            weight = (h["market_value"] / total_val * 100) if total_val > 0 else 0.0
+            brk_str = ", ".join(h.get("brokers", []))
+            lines.append(f"| **{h['ticker']}** | {h['shares']} | ${h['avg_cost']:.2f} | ${h['market_value']:,.2f} ({weight:.1f}%) | {h['currency']} | {brk_str} |")
+    else:
+        lines.append("| Ticker | Shares | Avg Cost | Est. Market Value | Currency |")
+        lines.append("| :--- | :---: | :---: | :---: | :---: |")
+        for h in holdings:
+            weight = (h["market_value"] / total_val * 100) if total_val > 0 else 0.0
+            lines.append(f"| **{h['ticker']}** | {h['shares']} | ${h['avg_cost']:.2f} | ${h['market_value']:,.2f} ({weight:.1f}%) | {h['currency']} |")
 
     return "\n".join(lines)
 

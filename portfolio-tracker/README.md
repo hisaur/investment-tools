@@ -60,12 +60,57 @@ cleanup.bat
 
 ```mermaid
 flowchart LR
-    A["Google Sheet\n(Single Source of Truth)"] -->|"Apps Script On-Edit"| B["portfolio_docker_sync.csv\n(Google Drive)"]
-    B -->|"Google Drive for Desktop"| C["Local Host: G:\\My Drive\nportfolio_docker_sync.csv"]
-    C -->|":ro Volume Mount"| D["sync-job Sidecar\n(sync.py)"]
-    D -->|"1. Auto-Creates User\n2. Generates API Key\n3. POST /api/v1/import"| E["Ephemeral Ghostfolio\n(Port 3333)"]
-    E --> F[("Ephemeral\nPostgreSQL")]
-    E --> G[("Ephemeral\nRedis")]
+    subgraph Upstream["Brokers & Ingestion"]
+        T212["Trading 212 API<br/>(Dynamic Sync)"] -->|Apps Script / CLI| GS
+        OtherB["Other Brokers<br/>(IBKR, Schwab, Manual - Static)"] -->|Manual Entry| GS
+        GS["Google Sheet<br/>(Single Source of Truth)"]
+    end
+    GS -->|"Apps Script On-Edit"| B["portfolio_docker_sync.csv<br/>(Google Drive)"]
+    B -->|"Google Drive for Desktop"| C["Local Host: G:\\My Drive<br/>portfolio_docker_sync.csv"]
+    C -->|":ro Volume Mount"| D["sync-job Sidecar<br/>(sync.py)"]
+    D -->|"1. Auto-Creates User<br/>2. Generates API Key<br/>3. POST /api/v1/import"| E["Ephemeral Ghostfolio<br/>(Port 3333)"]
+    E --> F[("Ephemeral<br/>PostgreSQL")]
+    E --> G[("Ephemeral<br/>Redis")]
+```
+
+---
+
+## 🔄 Dynamic Broker Sync (Trading 212) & Multi-Broker Support
+
+The Google Sheet operates as a single hybrid ledger for both **dynamic** (API-connected) and **static** (non-API) broker accounts:
+
+### 1. Data Model & Column Structure
+The first tab of your Google Sheet supports the following columns:
+
+| Column | Name | Format / Example | Description |
+| :---: | :--- | :--- | :--- |
+| **A** | `Date` | `2026-10-01` | Execution date (ISO YYYY-MM-DD) |
+| **B** | `Type` | `BUY` or `SELL` | Transaction type |
+| **C** | `Symbol` | `AAPL`, `MSFT`, `VIE.PA` | Standard ticker symbol |
+| **D** | `Quantity` | `10.5` | Executed share count |
+| **E** | `UnitPrice` | `150.25` | Price per share in asset currency |
+| **F** | `Currency` | `USD`, `EUR`, `GBP`, `AUD` | Trade currency |
+| **G** | `Fee` | `0.00` | Brokerage or transaction fees |
+| **H** | `Broker` | `Trading212`, `IBKR`, `Schwab`, `Manual` | Identifies broker source |
+| **I** | `OrderId` | `184729104` | Broker execution ID (prevents duplicates) |
+
+> [!IMPORTANT]
+> **Dynamic vs. Static Isolation**: Only rows where `Broker == 'Trading212'` are dynamically synchronized. All other rows (e.g. `Broker == 'IBKR'`, `Broker == 'Manual'`) are **STATIC** and will never be overwritten, modified, or deleted by the automated sync.
+
+### 2. Google Apps Script Automated Sync
+In your Google Sheet, open `Extensions` -> `Apps Script` and paste [`portfolio-tracker/apps-script/Code.gs`](./apps-script/Code.gs):
+- **Set API Key**: Click `📊 Ghostfolio Sync` -> `⚙️ Set Trading 212 API Key`. Key is stored securely in Google User Properties (never stored in cells or code).
+- **Run Sync**: Click `📊 Ghostfolio Sync` -> `📥 Sync Trading 212 Trades (Dynamic)`. Fetches filled orders, appends only new executions, and automatically updates the Drive CSV.
+- **Automated Timer (Optional)**: In Apps Script, set a time-driven trigger for `syncTrading212Orders` (e.g., daily or hourly) for 100% hands-free cloud synchronization.
+
+### 3. Local Python CLI Sync (`sync_trading212.py`)
+You can also preview and sync trades directly from your terminal:
+```bash
+# Preview recent executed orders in table format
+python portfolio-tracker/scripts/sync_trading212.py --api-key <YOUR_KEY>
+
+# Append new executed trades directly into local CSV
+python portfolio-tracker/scripts/sync_trading212.py --api-key <YOUR_KEY> --output-csv "G:\My Drive\portfolio_docker_sync.csv"
 ```
 
 ---

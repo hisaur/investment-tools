@@ -231,6 +231,7 @@ def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict
             raw_unit_price = row.get("unitprice") or row.get("unit_price") or row.get("price")
             raw_currency = row.get("currency", "USD")
             raw_fee = row.get("fee", "0")
+            raw_broker = row.get("broker", "")
 
             # Skip empty rows
             if not raw_symbol and not raw_quantity:
@@ -262,6 +263,9 @@ def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict
                     "type": activity_type,
                     "unitPrice": unit_price,
                 }
+
+                if raw_broker:
+                    activity["comment"] = f"Broker: {raw_broker}"
 
                 if account_id:
                     activity["accountId"] = account_id

@@ -224,8 +224,19 @@ def format_holdings_markdown(holdings: List[Dict[str, Any]], is_online: bool, ur
 
 
 def install_skill() -> int:
-    """Register skill globally into ~/.gemini/config/skills/portfolio-tracker."""
+    """Register skill suite globally into Antigravity."""
     root = find_repo_root()
+    monorepo_root = root.parent if (root.parent / "install.ps1").exists() else root
+    is_windows = platform.system() == "Windows"
+    installer = monorepo_root / ("install.ps1" if is_windows else "install.sh")
+    if installer.exists():
+        if is_windows:
+            cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(installer)]
+        else:
+            cmd = ["bash", str(installer)]
+        proc = subprocess.run(cmd, check=False)
+        return proc.returncode
+
     skill_src = root / "skills" / "portfolio-tracker"
     global_dir = Path.home() / ".gemini" / "config" / "skills"
     global_dir.mkdir(parents=True, exist_ok=True)
@@ -236,7 +247,7 @@ def install_skill() -> int:
         return 0
 
     print(f"[*] Installing skill: {skill_src} -> {target}")
-    if platform.system() == "Windows":
+    if is_windows:
         cmd = ["powershell", "-Command", f'New-Item -ItemType Junction -Path "{target}" -Target "{skill_src}"']
         proc = subprocess.run(cmd, check=False)
         if proc.returncode == 0:

@@ -72,6 +72,10 @@ $TempFiles = Get-ChildItem -Path $ScriptDir -Recurse -File -Include "*.tmp", "*.
 foreach ($file in $TempFiles) {
     Remove-Item -Path $file.FullName -Force -ErrorAction SilentlyContinue
 }
+$DataDir = Join-Path $ScriptDir "data"
+if (Test-Path $DataDir) {
+    Remove-Item -Path $DataDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 Write-Host "[OK] Local caches purged." -ForegroundColor Green
 
 Write-Host ""

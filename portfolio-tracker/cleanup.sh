@@ -35,6 +35,7 @@ fi
 echo "[3/3] Purging local caches and temporary files..."
 find "$DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$DIR" -type f \( -name "*.pyc" -o -name "*.tmp" -o -name "*.log" \) -delete 2>/dev/null || true
+rm -rf "$DIR/data" 2>/dev/null || true
 
 echo ""
 echo "================================================================="

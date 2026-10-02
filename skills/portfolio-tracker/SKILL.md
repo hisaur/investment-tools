@@ -83,13 +83,16 @@ python scripts/portfolio_ctl.py cleanup
 
 When sibling analytical skills (`stock-deep-dive`, `deep-value-hunter`, rebalancing engines) require portfolio context:
 
-1. **Run the Preparation Step**:
-   Execute `python <repo_or_skill_path>/scripts/portfolio_ctl.py ensure` to ensure the stack is healthy.
-2. **Fetch Portfolio Holdings**:
-   Execute `python <repo_or_skill_path>/scripts/portfolio_ctl.py holdings --json` to inspect:
+1. **Instant Direct Fast-Path (Recommended - <10ms)**:
+   Do **NOT** spin up Docker containers if you only need holdings, positions, or cash context.
+   Execute `python <repo_or_skill_path>/scripts/portfolio_ctl.py holdings --json` directly.
+   This immediately parses the synced Google Drive CSV in sub-milliseconds without container startup latency:
    - Existing asset symbols (to avoid duplicate recommendations)
    - Estimated book values and position weights
    - Total portfolio size
+
+2. **Interactive UI Path (Only if Web UI is requested by User)**:
+   Only execute `python <repo_or_skill_path>/scripts/portfolio_ctl.py ensure` or `start` when the user explicitly asks to view the Ghostfolio dashboard (`http://localhost:3333`) or inspect visual allocation charts.
 3. **Sector & Sizing Fit**:
    Use portfolio values to enforce maximum sector ceilings (25%) and calculate exact dollar commitments for Kelly-lite position sizing.
 4. **Post-Analysis Teardown (Optional)**:

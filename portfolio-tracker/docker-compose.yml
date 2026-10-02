@@ -11,7 +11,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ghostfolio}
       POSTGRES_USER: ${POSTGRES_USER:-ghostfolio}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ghostfolio_ephemeral_pw}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -47,11 +47,11 @@ services:
     ports:
       - "3333:3333"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-ghostfolio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ghostfolio}?sslmode=prefer
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ghostfolio}:${POSTGRES_PASSWORD:-ghostfolio_ephemeral_pw}@postgres:5432/${POSTGRES_DB:-ghostfolio}?sslmode=disable
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      ACCESS_TOKEN_SALT: ${ACCESS_TOKEN_SALT}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ACCESS_TOKEN_SALT: ${ACCESS_TOKEN_SALT:-ghostfolio_ephemeral_salt}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-ghostfolio_ephemeral_jwt_secret_1234567890}
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,8 +85,8 @@ services:
       SYNC_MODE: ${SYNC_MODE:-once} # Set to 'watch' for continuous sync or 'once' for on-demand
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
     volumes:
-      # Mount the local synced CSV into the container as read-only (:ro)
-      - "${LOCAL_CSV_PATH:-G:/My Drive/portfolio_docker_sync.csv}:/data/portfolio_docker_sync.csv:ro"
+      # Mount the local staged CSV directory into the container as read-only (:ro)
+      - "${LOCAL_DATA_DIR:-./data}:/data:ro"
     depends_on:
       - ghostfolio
     networks:

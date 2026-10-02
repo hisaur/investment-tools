@@ -130,6 +130,12 @@ if ($Watch) {
     docker compose -f (Join-Path $ScriptDir "docker-compose.yml") run --rm sync-job
 }
 
+# Automatically enrich manual cash assets with LIQUIDITY assetClass and friendly name
+try {
+    docker exec ghostfolio-postgres psql -U ghostfolio -d ghostfolio -c "UPDATE ""SymbolProfile"" SET name = COALESCE(NULLIF(REPLACE((SELECT comment FROM ""Order"" WHERE ""symbolProfileId"" = ""SymbolProfile"".id LIMIT 1), 'Broker: ', ''), ''), 'Cash Savings (5.25% APY)'), ""assetClass"" = 'LIQUIDITY', ""assetSubClass"" = 'CASH' WHERE symbol LIKE 'GF_CASH%' AND ""assetClass"" IS NULL;" 2>$null | Out-Null
+    docker exec ghostfolio-redis redis-cli flushall 2>$null | Out-Null
+} catch {}
+
 # 9. Open Dashboard in Browser
 Write-Host "`n[4/4] Launching Ghostfolio Dashboard..." -ForegroundColor Cyan
 Start-Process "http://localhost:3333"

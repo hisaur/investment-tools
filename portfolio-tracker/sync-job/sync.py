@@ -255,7 +255,16 @@ def normalize_currency_for_symbol(symbol: str, raw_currency: str) -> str:
         return curr or "AUD"
 
     # European equities
-    if s.endswith(".DE") or s.endswith(".AS") or s.endswith(".PA") or s.endswith("D_EQ") or s.endswith("A_EQ") or s.endswith("P_EQ"):
+    if (
+        s.endswith(".DE")
+        or s.endswith(".AS")
+        or s.endswith(".PA")
+        or s.endswith(".F")
+        or s.endswith("D_EQ")
+        or s.endswith("A_EQ")
+        or s.endswith("P_EQ")
+        or s in ("HO.PA", "013C.F")
+    ):
         return "EUR"
     if s.endswith(".L") or s.endswith("L_EQ"):
         return "GBP"

@@ -365,9 +365,22 @@ function syncTrading212Orders() {
         let currency = String(orderObj.currency || fillObj.currency || item.currencyCode || item.currency || "").toUpperCase();
         if (!currency || currency === "AUD") {
           const upperTicker = rawTicker.toUpperCase();
-          if (upperTicker.endsWith("D_EQ") || upperTicker.endsWith("A_EQ") || upperTicker.endsWith("P_EQ") || upperTicker.includes("_DE_") || upperTicker.includes("_NL_") || upperTicker.includes("_FR_")) {
+          if (
+            upperTicker.endsWith("D_EQ") ||
+            upperTicker.endsWith("A_EQ") ||
+            upperTicker.endsWith("P_EQ") ||
+            upperTicker === "013CD_EQ" ||
+            upperTicker === "HOP_EQ" ||
+            upperTicker.includes("_DE_") ||
+            upperTicker.includes("_NL_") ||
+            upperTicker.includes("_FR_") ||
+            cleanSymbol.endsWith(".F") ||
+            cleanSymbol.endsWith(".DE") ||
+            cleanSymbol.endsWith(".AS") ||
+            cleanSymbol.endsWith(".PA")
+          ) {
             currency = "EUR";
-          } else if (upperTicker.endsWith("L_EQ") || upperTicker.includes("_UK_")) {
+          } else if (upperTicker.endsWith("L_EQ") || upperTicker.includes("_UK_") || cleanSymbol.endsWith(".L")) {
             currency = "GBP";
           } else {
             currency = "USD";

@@ -157,7 +157,24 @@ def parse_csv_holdings(csv_path: str = DEFAULT_CSV_PATH) -> List[Dict[str, Any]]
                     price = float(row.get("UnitPrice") or 0.0)
                 except ValueError:
                     continue
-                curr = (row.get("Currency") or "USD").strip().upper()
+                curr = (row.get("Currency") or "").strip().upper()
+                if any(k in sym for k in ("CASH", "HYSA", "SAVINGS")):
+                    curr = curr or "AUD"
+                elif (
+                    sym.endswith(".DE")
+                    or sym.endswith(".AS")
+                    or sym.endswith(".PA")
+                    or sym.endswith(".F")
+                    or sym.endswith("D_EQ")
+                    or sym.endswith("A_EQ")
+                    or sym.endswith("P_EQ")
+                    or sym in ("HO.PA", "013C.F")
+                ):
+                    curr = "EUR"
+                elif sym.endswith(".L") or sym.endswith("L_EQ"):
+                    curr = "GBP"
+                elif curr == "AUD" or not curr:
+                    curr = "USD"
 
                 if sym not in trades_by_symbol:
                     trades_by_symbol[sym] = {

@@ -7,10 +7,10 @@ echo "================================================================="
 echo "  🚀 GHOSTFOLIO EPHEMERAL PIPELINE: 1-COMMAND RUNNER "
 echo "================================================================="
 
-# 1. Ephemeral Secret Configuration (Stable default fallbacks)
-export POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-"ghostfolio_ephemeral_pw"}
-export JWT_SECRET_KEY=${JWT_SECRET_KEY:-"ghostfolio_ephemeral_jwt_secret_1234567890"}
-export ACCESS_TOKEN_SALT=${ACCESS_TOKEN_SALT:-"ghostfolio_ephemeral_salt"}
+# 1. Ephemeral Secret Generation (In-Memory Only - Zero Secrets on Disk)
+export POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-$(openssl rand -hex 16 2>/dev/null || od -vN "16" -An -tx1 /dev/urandom | tr -d " \n")}
+export JWT_SECRET_KEY=${JWT_SECRET_KEY:-$(openssl rand -hex 32 2>/dev/null || od -vN "32" -An -tx1 /dev/urandom | tr -d " \n")}
+export ACCESS_TOKEN_SALT=${ACCESS_TOKEN_SALT:-$(openssl rand -hex 16 2>/dev/null || od -vN "16" -An -tx1 /dev/urandom | tr -d " \n")}
 
 if [ ! -f "$DIR/.env" ] && [ -f "$DIR/.env.example" ]; then
     cp "$DIR/.env.example" "$DIR/.env"
@@ -49,12 +49,10 @@ if [ $retries -ge 60 ]; then
 fi
 echo "[OK] Ghostfolio is ready!"
 
-echo "[3/4] Ingesting portfolio trades..."
-if python3 -c "import requests, dateutil" 2>/dev/null; then
-    echo "[FAST PATH] Executing native host sync (sub-second direct execution)..."
-    GHOSTFOLIO_URL="http://localhost:3333" CSV_FILE_PATH="$CSV_PATH" python3 "$DIR/sync-job/sync.py"
+echo "[3/4] Ingesting portfolio trades via container sidecar..."
+if [ "$1" == "--watch" ]; then
+    docker compose -f "$DIR/docker-compose.yml" up -d sync-job
 else
-    echo "[INFO] Running ingestion inside Docker container..."
     docker compose -f "$DIR/docker-compose.yml" run --rm sync-job
 fi
 

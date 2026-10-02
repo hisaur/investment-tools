@@ -5,14 +5,13 @@
     1. Validates host Google Drive CSV
     2. Spins up ephemeral Ghostfolio, Postgres, and Redis containers
     3. Waits for Ghostfolio readiness
-    4. Executes sync-job to auto-provision user, map CSV trades, and import into Ghostfolio
+    4. Executes containerized sync-job to auto-provision user, map CSV trades, and import into Ghostfolio
     5. Opens Ghostfolio in your default browser
 #>
 
 param (
     [switch]$Watch,
-    [switch]$DryRun,
-    [switch]$ContainerSync
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,15 +23,15 @@ Write-Host "  🚀 GHOSTFOLIO EPHEMERAL PIPELINE: 1-COMMAND RUNNER " -Foreground
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Ephemeral Secret Configuration (Stable default fallbacks to prevent credential mismatch)
+# 1. Ephemeral Secret Generation (In-Memory Only - Zero Secrets on Disk)
 if (-not $env:POSTGRES_PASSWORD) {
-    $env:POSTGRES_PASSWORD = "ghostfolio_ephemeral_pw"
+    $env:POSTGRES_PASSWORD = [System.Guid]::NewGuid().ToString("N")
 }
 if (-not $env:JWT_SECRET_KEY) {
-    $env:JWT_SECRET_KEY = "ghostfolio_ephemeral_jwt_secret_1234567890"
+    $env:JWT_SECRET_KEY = [System.Guid]::NewGuid().ToString("N") + [System.Guid]::NewGuid().ToString("N")
 }
 if (-not $env:ACCESS_TOKEN_SALT) {
-    $env:ACCESS_TOKEN_SALT = "ghostfolio_ephemeral_salt"
+    $env:ACCESS_TOKEN_SALT = [System.Guid]::NewGuid().ToString("N")
 }
 
 # 2. Check for optional local overrides (.env)
@@ -66,7 +65,7 @@ if (Test-Path $CsvHostPath) {
     $LineCount = (Get-Content $CsvHostPath | Measure-Object -Line).Lines
     Write-Host "[OK] Synced Google Drive CSV found: $CsvHostPath ($LineCount lines)" -ForegroundColor Green
     Copy-Item $CsvHostPath (Join-Path $DataDir "portfolio_docker_sync.csv") -Force
-    Write-Host "[OK] Synced CSV staged to local storage: $(Join-Path $DataDir 'portfolio_docker_sync.csv')" -ForegroundColor Green
+    Write-Host "[OK] Synced CSV staged to local storage for Docker mount: $(Join-Path $DataDir 'portfolio_docker_sync.csv')" -ForegroundColor Green
 } else {
     Write-Host "[WARNING] Synced CSV not found at $CsvHostPath." -ForegroundColor Yellow
     Write-Host "          Ensure Google Drive for Desktop is running and syncing," -ForegroundColor Yellow
@@ -122,28 +121,12 @@ if (-not $IsHealthy) {
 
 Write-Host "`n[OK] Ghostfolio is healthy and accepting connections (ready in ${Retries}s)!" -ForegroundColor Green
 
-# 8. Execute Ingestion (Fast Native Python when available, Container fallback)
-Write-Host "`n[3/4] Ingesting portfolio trades into Ghostfolio..." -ForegroundColor Cyan
-$CanUseHostPython = $false
-if (-not $ContainerSync -and -not $Watch) {
-    try {
-        $pythonCheck = & python -c "import requests, dateutil" 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $CanUseHostPython = $true
-        }
-    } catch {}
-}
-
+# 8. Execute Ingestion Sidecar in Docker
+Write-Host "`n[3/4] Ingesting portfolio trades into Ghostfolio via container sidecar..." -ForegroundColor Cyan
 if ($Watch) {
     Write-Host "[INFO] Starting sidecar in continuous WATCH mode via Docker..." -ForegroundColor Cyan
     docker compose -f (Join-Path $ScriptDir "docker-compose.yml") up -d sync-job
-} elseif ($CanUseHostPython) {
-    Write-Host "[FAST PATH] Executing native host sync (sub-second direct execution)..." -ForegroundColor Green
-    $env:GHOSTFOLIO_URL = "http://localhost:3333"
-    $env:CSV_FILE_PATH = $CsvHostPath
-    python (Join-Path $ScriptDir "sync-job\sync.py")
 } else {
-    Write-Host "[INFO] Running ingestion inside Docker container..." -ForegroundColor Cyan
     docker compose -f (Join-Path $ScriptDir "docker-compose.yml") run --rm sync-job
 }
 

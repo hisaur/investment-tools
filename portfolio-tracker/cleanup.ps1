@@ -20,6 +20,10 @@ Write-Host "=================================================================" -
 Write-Host ""
 
 # 1. Stop containers and destroy volumes & orphans
+if (-not $env:POSTGRES_PASSWORD) { $env:POSTGRES_PASSWORD = "cleanup" }
+if (-not $env:JWT_SECRET_KEY) { $env:JWT_SECRET_KEY = "cleanup" }
+if (-not $env:ACCESS_TOKEN_SALT) { $env:ACCESS_TOKEN_SALT = "cleanup" }
+
 Write-Host "[1/3] Stopping containers and removing ephemeral volumes..." -ForegroundColor Cyan
 try {
     docker compose -f (Join-Path $ScriptDir "docker-compose.yml") down -v --remove-orphans

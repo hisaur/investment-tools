@@ -1,6 +1,6 @@
-# Value Investing & Portfolio Suite (Antigravity Plugin)
+# Investment Tools (Antigravity Plugin)
 
-> A unified, professional investment analysis and portfolio management plugin for Google Antigravity. Combines rigorous GARP valuation, quantitative deep value screening, and an ephemeral Ghostfolio Docker pipeline.
+> A unified, professional investment analysis and portfolio management plugin for Google Antigravity. Combines rigorous equity valuation, quantitative deep value screening, and an ephemeral Ghostfolio Docker pipeline.
 
 ---
 
@@ -8,7 +8,7 @@
 
 ```mermaid
 flowchart TD
-    subgraph Plugin["Value Investing Plugin (Documents/value-investing)"]
+    subgraph Plugin["Investment Tools Plugin (Documents/investment-tools)"]
         subgraph Skills["Bundled Skills"]
             S1["skills/stock-deep-dive<br/>(Fundamental Valuation & GARP)"]
             S2["skills/deep-value-hunter<br/>(Quantitative Screening & DD)"]
@@ -51,7 +51,7 @@ To install and activate it globally across all Antigravity sessions:
 
 ```powershell
 # From the repository root:
-New-Item -ItemType Junction -Path "$HOME\.gemini\config\plugins\value-investing" -Target "$PWD"
+New-Item -ItemType Junction -Path "$HOME\.gemini\config\plugins\investment-tools" -Target "$PWD"
 ```
 
 Once linked, Antigravity automatically discovers the plugin and all 3 bundled skills.
@@ -95,7 +95,7 @@ python skills/deep-value-hunter/scripts/screen.py --check-portfolio --top 10
 ## 📁 Repository Layout
 
 ```
-value-investing/
+investment-tools/
 ├── plugin.json                                # Antigravity Plugin manifest
 ├── README.md                                  # Plugin documentation
 ├── LICENSE                                    # MIT License

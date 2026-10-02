@@ -1,6 +1,6 @@
 {
-  "name": "value-investing",
-  "displayName": "Value Investing & Portfolio Suite",
+  "name": "investment-tools",
+  "displayName": "Investment Tools",
   "version": "1.0.0",
-  "description": "Fundamental stock valuation, quantitative deep value screening, and ephemeral Ghostfolio portfolio management."
+  "description": "Stock valuation, quantitative screening, and ephemeral Ghostfolio portfolio management."
 }

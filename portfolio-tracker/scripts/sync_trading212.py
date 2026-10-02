@@ -61,9 +61,27 @@ def build_auth_header(api_key: str, api_secret: Optional[str] = None) -> str:
     return api_key.strip()
 
 
+def build_trading212_url(base_url: str, path: str) -> str:
+    """Construct absolute URL avoiding duplicate /api/v0 and enforcing HTTPS."""
+    if path.startswith("https://"):
+        return path
+    if path.startswith("http://"):
+        return "https://" + path[7:]
+
+    host_match = re.match(r"^(https://[^/]+)", base_url, re.IGNORECASE)
+    host = host_match.group(1) if host_match else re.sub(r"/api/v0/?$", "", base_url, flags=re.IGNORECASE)
+
+    clean_path = path if path.startswith("/") else "/" + path
+    clean_path = re.sub(r"^/api/v0/api/v0/", "/api/v0/", clean_path, flags=re.IGNORECASE)
+
+    if clean_path.startswith("/api/v0/"):
+        return f"{host}{clean_path}"
+    return f"{host}/api/v0{clean_path}"
+
+
 def fetch_account_currency(base_url: str, auth_header: str) -> str:
     """Query /equity/account/info to get the base account currency."""
-    url = f"{base_url}/equity/account/info"
+    url = build_trading212_url(base_url, "/equity/account/info")
     req = urllib.request.Request(url, headers={
         "Authorization": auth_header,
         "Accept": "application/json",
@@ -109,9 +127,7 @@ def fetch_historical_orders(
     page = 0
     while next_path and page < max_pages:
         page += 1
-        url = next_path if next_path.startswith("http") else f"{base_url}{next_path}"
-        if url.startswith("http://"):
-            url = "https://" + url[7:]
+        url = build_trading212_url(base_url, next_path)
         req = urllib.request.Request(url, headers=headers)
 
         try:

@@ -9,11 +9,11 @@
  * Credentials are stored securely in private UserProperties (never in cells).
  *
  * ENDPOINTS & SCHEMA (Trading 212 v0):
- * - History: GET /equity/history/orders?limit=50
- * - Structure per item:
+ * - Orders History: GET https://live.trading212.com/api/v0/equity/history/orders?limit=50
+ * - Account Info:   GET https://live.trading212.com/api/v0/equity/account/info
+ * - Item structure:
  *     item.order: { id, ticker, status, type, side, filledValue, createdAt }
  *     item.fill:  { quantity, price, filledAt, walletImpact: { taxes } }
- * - Account: GET /equity/account/info -> { id, currencyCode }
  *
  * ACTIONS:
  * 1. syncTrading212Orders() : Broker API -> Google Sheet ledger
@@ -40,6 +40,38 @@ function onOpen() {
 
 function getUiSafely() {
   try { return SpreadsheetApp.getUi(); } catch (e) { return null; }
+}
+
+/**
+ * Robust URL constructor that prevents double /api/v0 prefixing
+ * and enforces strict HTTPS.
+ */
+function buildTrading212Url(baseUrl, path) {
+  if (path.startsWith("https://")) {
+    return path;
+  }
+  if (path.startsWith("http://")) {
+    return path.replace(/^http:\/\//i, "https://");
+  }
+
+  // Extract root host (e.g. https://live.trading212.com)
+  const hostMatch = baseUrl.match(/^(https:\/\/[^\/]+)/i);
+  const host = hostMatch ? hostMatch[1] : baseUrl.replace(/\/api\/v0\/?$/i, "");
+
+  let cleanPath = path;
+  if (!cleanPath.startsWith("/")) {
+    cleanPath = "/" + cleanPath;
+  }
+
+  // Deduplicate any repeated /api/v0 (e.g. /api/v0/api/v0/...)
+  cleanPath = cleanPath.replace(/^\/api\/v0\/api\/v0\//i, "/api/v0/");
+
+  // If path already starts with /api/v0 (such as T212's nextPagePath), attach host directly
+  if (cleanPath.startsWith("/api/v0/")) {
+    return `${host}${cleanPath}`;
+  }
+
+  return `${host}/api/v0${cleanPath}`;
 }
 
 /**
@@ -97,11 +129,13 @@ function toggleTrading212Environment() {
  */
 function fetchT212AccountCurrency(baseUrl, authHeader) {
   try {
-    const resp = UrlFetchApp.fetch(`${baseUrl}/equity/account/info`, {
+    const url = buildTrading212Url(baseUrl, "/equity/account/info");
+    const resp = UrlFetchApp.fetch(url, {
       method: "GET",
       headers: {
         "Authorization": authHeader,
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "User-Agent": "Antigravity-PortfolioTracker/1.0"
       },
       muteHttpExceptions: true
     });
@@ -221,11 +255,9 @@ function syncTrading212Orders() {
   try {
     while (nextPath && pageCount < maxPages) {
       pageCount++;
-      let url = nextPath.startsWith("http") ? nextPath : `${baseUrl}${nextPath}`;
-      // Enforce TLS/HTTPS encryption - never transmit credentials over plain HTTP
-      if (url.startsWith("http://")) {
-        url = url.replace(/^http:\/\//i, "https://");
-      }
+      const url = buildTrading212Url(baseUrl, nextPath);
+      Logger.log(`[T212 Sync] Fetching page ${pageCount}: ${url}`);
+
       const response = UrlFetchApp.fetch(url, {
         method: "GET",
         headers: {
@@ -238,11 +270,11 @@ function syncTrading212Orders() {
 
       const statusCode = response.getResponseCode();
       if (statusCode === 401 || statusCode === 403) {
-        throw new Error(`Authentication failed (HTTP ${statusCode}). Verify that your API Key ID and Secret Key are correct and that 'History' permissions are enabled in Trading 212 settings.`);
+        throw new Error(`Authentication failed (HTTP ${statusCode}) on ${url}.\nVerify that your API Key ID and Secret Key are correct and that 'History' permissions are enabled in Trading 212 settings.`);
       } else if (statusCode === 429) {
         throw new Error("Rate limit exceeded from Trading 212 (max 20 req/min for history). Please wait a moment and retry.");
       } else if (statusCode !== 200) {
-        throw new Error(`Trading 212 API error (HTTP ${statusCode}): ${response.getContentText()}`);
+        throw new Error(`Trading 212 API error (HTTP ${statusCode}) on ${url}:\n${response.getContentText()}`);
       }
 
       const payload = JSON.parse(response.getContentText());
@@ -255,7 +287,7 @@ function syncTrading212Orders() {
         // T212 Schema: fields can be nested under item.order and item.fill, or at top level
         const orderObj = item.order || item;
         const fillObj = item.fill || item;
-        const walletObj = (fillObj.walletImpact) || item.walletImpact || {};
+        const walletObj = fillObj.walletImpact || item.walletImpact || {};
 
         const orderId = String(orderObj.id || item.id || "").trim();
         if (orderId && existingOrderIds.has(orderId)) {

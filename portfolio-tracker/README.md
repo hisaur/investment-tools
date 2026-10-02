@@ -103,15 +103,21 @@ In your Google Sheet, open `Extensions` -> `Apps Script` and paste [`portfolio-t
 - **Run Sync**: Click `📊 Ghostfolio Sync` -> `📥 Sync Trading 212 Trades (Dynamic)`. Fetches filled orders, appends only new executions, and automatically updates the Drive CSV.
 - **Automated Timer (Optional)**: In Apps Script, set a time-driven trigger for `syncTrading212Orders` (e.g., daily or hourly) for 100% hands-free cloud synchronization.
 
-### 3. Local Python CLI Sync (`sync_trading212.py`)
-You can also preview and sync trades directly from your terminal:
+### 3. Local Python CLI Verification Tool (`sync_trading212.py`)
+To inspect recent executed orders, test your API key, or copy trades as TSV directly into Google Sheets:
 ```bash
 # Preview recent executed orders in table format
 python portfolio-tracker/scripts/sync_trading212.py --api-key <YOUR_KEY>
 
-# Append new executed trades directly into local CSV
-python portfolio-tracker/scripts/sync_trading212.py --api-key <YOUR_KEY> --output-csv "G:\My Drive\portfolio_docker_sync.csv"
+# Output tab-separated format (TSV) to copy-paste directly into Google Sheets
+python portfolio-tracker/scripts/sync_trading212.py --api-key <YOUR_KEY> --tsv
+
+# Output raw JSON for debugging
+python portfolio-tracker/scripts/sync_trading212.py --api-key <YOUR_KEY> --json
 ```
+
+> [!NOTE]
+> **Source of Truth Integrity**: All trades must be written into your **Google Sheet** (either via `Code.gs` in Apps Script or manual entry). The Google Sheet's automated action will then export `portfolio_docker_sync.csv` into Google Drive. Do not write directly to the local CSV file on disk.
 
 ---
 

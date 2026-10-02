@@ -75,27 +75,45 @@ function toggleTrading212Environment() {
 }
 
 /**
+ * Helper to safely retrieve Spreadsheet UI, returning null when running
+ * headlessly (e.g. from installable time-driven triggers or webhooks).
+ */
+function getUiSafely() {
+  try {
+    return SpreadsheetApp.getUi();
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * Fetches recent filled orders from Trading 212 API and appends new trades into the sheet.
  * Only rows with Broker == 'Trading212' are synced; all other brokers are untouched.
+ * Automatically triggers exportToDriveCSV() after appending new trades.
  */
 function syncTrading212Orders() {
-  const ui = SpreadsheetApp.getUi();
+  const ui = getUiSafely();
   const props = PropertiesService.getUserProperties();
   let apiKey = props.getProperty("T212_API_KEY");
 
   if (!apiKey) {
-    const promptResp = ui.prompt(
-      "Trading 212 API Key Required",
-      "No API Key found. Please enter your Trading 212 API Key:",
-      ui.ButtonSet.OK_CANCEL
-    );
-    if (promptResp.getSelectedButton() !== ui.Button.OK) return;
-    apiKey = promptResp.getResponseText().trim();
-    if (!apiKey) {
-      ui.alert("Sync aborted: No API Key provided.");
+    if (ui) {
+      const promptResp = ui.prompt(
+        "Trading 212 API Key Required",
+        "No API Key found. Please enter your Trading 212 API Key:",
+        ui.ButtonSet.OK_CANCEL
+      );
+      if (promptResp.getSelectedButton() !== ui.Button.OK) return;
+      apiKey = promptResp.getResponseText().trim();
+      if (!apiKey) {
+        ui.alert("Sync aborted: No API Key provided.");
+        return;
+      }
+      props.setProperty("T212_API_KEY", apiKey);
+    } else {
+      Logger.log("Trading 212 sync aborted: No API key found in UserProperties.");
       return;
     }
-    props.setProperty("T212_API_KEY", apiKey);
   }
 
   const env = props.getProperty("T212_ENV") || "live";
@@ -273,14 +291,23 @@ function syncTrading212Orders() {
       // 5. Auto-export to Drive CSV so Ghostfolio ingestion is immediately up to date
       exportToDriveCSV();
 
-      ui.alert(`✅ Sync Complete!\n\nAdded ${newTrades.length} new trades from Trading 212.\nExported latest portfolio_docker_sync.csv to Google Drive.`);
+      const msg = `Added ${newTrades.length} new trades from Trading 212.\nExported latest portfolio_docker_sync.csv to Google Drive.`;
+      Logger.log(msg);
+      if (ui) {
+        ui.alert(`✅ Sync Complete!\n\n${msg}`);
+      }
     } else {
-      ui.alert("ℹ️ Up to date: No new Trading 212 trades found.");
+      Logger.log("Up to date: No new Trading 212 trades found.");
+      if (ui) {
+        ui.alert("ℹ️ Up to date: No new Trading 212 trades found.");
+      }
     }
 
   } catch (err) {
     Logger.log(`Trading 212 Sync Error: ${err.message}`);
-    ui.alert(`❌ Trading 212 Sync Error:\n\n${err.message}`);
+    if (ui) {
+      ui.alert(`❌ Trading 212 Sync Error:\n\n${err.message}`);
+    }
   }
 }
 

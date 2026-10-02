@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """
-Trading 212 API Order Fetcher & Sync Utility
----------------------------------------------
+Trading 212 API Diagnostic & Order Inspection Utility
+------------------------------------------------------
 Queries the Trading 212 Public API (Invest / Stocks ISA) for historical orders,
-normalizes order data into the Ghostfolio/Google Sheet schema, and supports
-local preview or CSV export.
+verifies API credentials, and outputs formatted orders for inspection or manual
+copy-paste into Google Sheets.
+
+NOTE: Do NOT write directly to 'portfolio_docker_sync.csv'!
+Google Sheets is the single source of truth for the portfolio ledger.
+Google Sheets contains an automated Apps Script action that exports its data
+to 'portfolio_docker_sync.csv' in Google Drive. Writing to the local CSV directly
+bypasses the sheet ledger and will be overwritten on the next sheet export.
+
+To automatically sync Trading 212 orders into Google Sheets, use the Apps Script
+function in `portfolio-tracker/apps-script/Code.gs` directly from your sheet.
 """
 
 import argparse
-import csv
 import json
 import os
 import re
@@ -16,7 +24,6 @@ import sys
 import urllib.error
 import urllib.request
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Ensure console handles UTF-8 on Windows
@@ -44,7 +51,7 @@ def fetch_historical_orders(
     api_key: str,
     demo: bool = False,
     limit: int = 50,
-    max_pages: int = 10,
+    max_pages: int = 5,
     ticker: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
@@ -140,59 +147,45 @@ def fetch_historical_orders(
     return orders
 
 
-def append_to_csv(orders: List[Dict[str, Any]], csv_path: str) -> int:
-    """Append new orders to CSV without duplicating existing OrderIds or signatures."""
-    target = Path(csv_path)
-    existing_ids = set()
-    existing_sigs = set()
-
-    fieldnames = ["Date", "Type", "Symbol", "Quantity", "UnitPrice", "Currency", "Fee", "Broker", "OrderId"]
-
-    if target.exists():
-        with open(target, "r", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                oid = (row.get("OrderId") or "").strip()
-                if oid:
-                    existing_ids.add(oid)
-                sig = f"{row.get('Date')}_{row.get('Symbol')}_{row.get('Type')}_{row.get('Quantity')}"
-                existing_sigs.add(sig)
-
-    new_rows = []
+def print_tsv(orders: List[Dict[str, Any]]):
+    """Print orders in tab-separated format for easy copy-pasting into Google Sheets."""
+    headers = ["Date", "Type", "Symbol", "Quantity", "UnitPrice", "Currency", "Fee", "Broker", "OrderId"]
+    print("\t".join(headers))
     for o in orders:
-        oid = o["OrderId"]
-        sig = f"{o['Date']}_{o['Symbol']}_{o['Type']}_{o['Quantity']}"
-        if oid and oid in existing_ids:
-            continue
-        if sig in existing_sigs:
-            continue
-        new_rows.append(o)
-        if oid:
-            existing_ids.add(oid)
-        existing_sigs.add(sig)
+        row = [
+            str(o.get("Date", "")),
+            str(o.get("Type", "")),
+            str(o.get("Symbol", "")),
+            str(o.get("Quantity", "")),
+            str(o.get("UnitPrice", "")),
+            str(o.get("Currency", "")),
+            str(o.get("Fee", "")),
+            str(o.get("Broker", "")),
+            str(o.get("OrderId", ""))
+        ]
+        print("\t".join(row))
 
-    if not new_rows:
-        return 0
 
-    write_header = not target.exists()
-    with open(target, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        if write_header:
-            writer.writeheader()
-        writer.writerows(new_rows)
-
-    return len(new_rows)
+def print_table(orders: List[Dict[str, Any]]):
+    """Print orders formatted as a human-readable table."""
+    print(f"\n[OK] Retrieved {len(orders)} filled orders from Trading 212:\n")
+    print(f"{'Date':<12} {'Type':<6} {'Symbol':<10} {'Shares':<10} {'UnitPrice':<12} {'Currency':<8} {'Broker':<12} {'OrderId'}")
+    print("-" * 85)
+    for o in orders:
+        print(f"{o['Date']:<12} {o['Type']:<6} {o['Symbol']:<10} {o['Quantity']:<10} ${o['UnitPrice']:<11.2f} {o['Currency']:<8} {o['Broker']:<12} {o['OrderId']}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch executed trades from Trading 212 API")
+    parser = argparse.ArgumentParser(
+        description="Inspect and verify executed trades from Trading 212 API"
+    )
     parser.add_argument("--api-key", default=os.getenv("TRADING212_API_KEY"), help="Trading 212 API Key (or set TRADING212_API_KEY env)")
     parser.add_argument("--demo", action="store_true", help="Use Trading 212 Practice / Demo environment")
-    parser.add_argument("--limit", type=int, default=50, help="Max orders to fetch per request")
+    parser.add_argument("--limit", type=int, default=50, help="Max orders to fetch per request (default: 50)")
     parser.add_argument("--max-pages", type=int, default=5, help="Max pagination depth (default: 5)")
-    parser.add_argument("--ticker", help="Filter by specific instrument ticker")
-    parser.add_argument("--output-csv", help="Optional CSV file path to append new trades to")
+    parser.add_argument("--ticker", help="Filter by specific instrument ticker (e.g. AAPL)")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
+    parser.add_argument("--tsv", action="store_true", help="Output results as TSV (Tab-Separated) to copy-paste into Google Sheets")
 
     args = parser.parse_args()
 
@@ -211,17 +204,10 @@ def main():
 
     if args.json:
         print(json.dumps(orders, indent=2))
-        return
-
-    print(f"\n[OK] Retrieved {len(orders)} filled orders from Trading 212:\n")
-    print(f"{'Date':<12} {'Type':<6} {'Symbol':<10} {'Shares':<10} {'UnitPrice':<12} {'Currency':<8} {'Broker':<12} {'OrderId'}")
-    print("-" * 85)
-    for o in orders:
-        print(f"{o['Date']:<12} {o['Type']:<6} {o['Symbol']:<10} {o['Quantity']:<10} ${o['UnitPrice']:<11.2f} {o['Currency']:<8} {o['Broker']:<12} {o['OrderId']}")
-
-    if args.output_csv:
-        count = append_to_csv(orders, args.output_csv)
-        print(f"\n[OK] Appended {count} new trades into {args.output_csv}")
+    elif args.tsv:
+        print_tsv(orders)
+    else:
+        print_table(orders)
 
 
 if __name__ == "__main__":

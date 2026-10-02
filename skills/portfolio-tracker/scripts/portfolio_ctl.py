@@ -148,7 +148,14 @@ def parse_csv_holdings(csv_path: str = DEFAULT_CSV_PATH) -> List[Dict[str, Any]]
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                sym = (row.get("Symbol") or "").strip().upper()
+                raw_sym = (row.get("Symbol") or "").strip().upper()
+                sym = raw_sym
+                if sym == "ANTM":
+                    sym = "ELV"
+                elif sym in ("013CD_EQ", "013C.DE", "013C", "GF_013C_DE"):
+                    sym = "013C.F"
+                elif sym in ("HOP_EQ", "HOP.PA", "HOP"):
+                    sym = "HO.PA"
                 ttype = (row.get("Type") or "BUY").strip().upper()
                 if not sym:
                     continue

@@ -1,22 +1,20 @@
 /**
  * Google Apps Script: Portfolio Ingestion & Export Suite
  * -------------------------------------------------------
- * Contains two completely decoupled, independent actions:
- * 
- * 1. syncTrading212Orders() : Broker -> Google Sheet
- *    Queries Trading 212 API and appends new trades into the sheet ledger.
- *    Does NOT call autoExportToCSV.
- * 
- * 2. autoExportToCSV()      : Google Sheet -> Google Drive CSV
- *    Exports current sheet data to portfolio_docker_sync.csv.
- *    Triggered by sheet edits / manual trigger. Does NOT call broker sync.
+ * Two independent actions in a single file:
+ * 1. syncTrading212Orders() : Broker -> Google Sheet (Does NOT call export)
+ * 2. autoExportToCSV()      : Google Sheet -> Drive CSV (Does NOT call broker sync)
+ *
+ * AUTHENTICATION:
+ * Trading 212 uses HTTP Basic Authentication: Base64(API_KEY_ID:SECRET_KEY).
+ * Credentials are stored safely in Google UserProperties (never in sheet cells).
  */
 
 const T212_LIVE_BASE_URL = "https://live.trading212.com/api/v0";
 const T212_DEMO_BASE_URL = "https://demo.trading212.com/api/v0";
 
 /**
- * Creates custom menu in Google Sheets UI when spreadsheet opens.
+ * Custom menu to trigger either action or configure settings independently
  */
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -24,47 +22,58 @@ function onOpen() {
     .addItem("📥 Sync Trading 212 Trades", "syncTrading212Orders")
     .addItem("📤 Export Sheet to Drive CSV", "autoExportToCSV")
     .addSeparator()
-    .addItem("⚙️ Set Trading 212 API Key", "setTrading212ApiKey")
+    .addItem("⚙️ Set Trading 212 API Credentials", "setTrading212ApiKey")
     .addItem("🔄 Toggle Demo / Live Mode", "toggleTrading212Environment")
     .addToUi();
 }
 
-/**
- * Safely gets UI (returns null when running headlessly via automated triggers).
- */
 function getUiSafely() {
-  try {
-    return SpreadsheetApp.getUi();
-  } catch (e) {
-    return null;
-  }
+  try { return SpreadsheetApp.getUi(); } catch (e) { return null; }
 }
 
 /**
- * Prompts user to enter Trading 212 API Key and saves it in UserProperties.
+ * Prompts user to enter both API Key ID and Secret Key,
+ * saving them securely into private UserProperties.
  */
 function setTrading212ApiKey() {
   const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt(
-    "Trading 212 API Configuration",
-    "Enter your Trading 212 API Key (ensure 'History' permission is checked in T212):",
+  const props = PropertiesService.getUserProperties();
+
+  const idResp = ui.prompt(
+    "Trading 212 Setup (Step 1 of 2)",
+    "Enter your Trading 212 API Key ID (or paste 'KEY_ID:SECRET' here):",
     ui.ButtonSet.OK_CANCEL
   );
-
-  if (response.getSelectedButton() === ui.Button.OK) {
-    const key = response.getResponseText().trim();
-    if (key) {
-      PropertiesService.getUserProperties().setProperty("T212_API_KEY", key);
-      ui.alert("✅ Trading 212 API Key saved securely in Google User Properties!");
-    } else {
-      ui.alert("⚠️ API key cannot be empty.");
-    }
+  if (idResp.getSelectedButton() !== ui.Button.OK) return;
+  const rawInput = idResp.getResponseText().trim();
+  if (!rawInput) {
+    ui.alert("⚠️ API Key ID cannot be empty.");
+    return;
   }
+
+  let keyId = rawInput;
+  let secretKey = "";
+
+  if (rawInput.includes(":")) {
+    const parts = rawInput.split(":");
+    keyId = parts[0].trim();
+    secretKey = parts.slice(1).join(":").trim();
+  } else {
+    const secResp = ui.prompt(
+      "Trading 212 Setup (Step 2 of 2)",
+      "Enter your Trading 212 Secret Key (shown once upon creation):",
+      ui.ButtonSet.OK_CANCEL
+    );
+    if (secResp.getSelectedButton() !== ui.Button.OK) return;
+    secretKey = secResp.getResponseText().trim();
+  }
+
+  props.setProperty("T212_API_KEY", keyId);
+  props.setProperty("T212_API_SECRET", secretKey);
+
+  ui.alert("✅ Trading 212 credentials saved securely in UserProperties!\n(Never displayed in spreadsheet cells or shared with viewers).");
 }
 
-/**
- * Toggles between Live and Demo (Practice) environments.
- */
 function toggleTrading212Environment() {
   const props = PropertiesService.getUserProperties();
   const current = props.getProperty("T212_ENV") || "live";
@@ -81,22 +90,30 @@ function syncTrading212Orders() {
   const ui = getUiSafely();
   const props = PropertiesService.getUserProperties();
   let apiKey = props.getProperty("T212_API_KEY");
+  let apiSecret = props.getProperty("T212_API_SECRET") || "";
 
   if (!apiKey) {
     if (ui) {
-      const promptResp = ui.prompt(
-        "Trading 212 API Key Required",
-        "No API Key found. Please enter your Trading 212 API Key:",
-        ui.ButtonSet.OK_CANCEL
-      );
-      if (promptResp.getSelectedButton() !== ui.Button.OK) return;
-      apiKey = promptResp.getResponseText().trim();
+      setTrading212ApiKey();
+      apiKey = props.getProperty("T212_API_KEY");
+      apiSecret = props.getProperty("T212_API_SECRET") || "";
       if (!apiKey) return;
-      props.setProperty("T212_API_KEY", apiKey);
     } else {
-      Logger.log("Trading 212 sync aborted: No API key found in UserProperties.");
+      Logger.log("Trading 212 sync aborted: No API credentials found in UserProperties.");
       return;
     }
+  }
+
+  // Construct HTTP Basic Authorization header
+  let authHeader;
+  if (apiSecret) {
+    authHeader = "Basic " + Utilities.base64Encode(`${apiKey}:${apiSecret}`);
+  } else if (apiKey.includes(":")) {
+    authHeader = "Basic " + Utilities.base64Encode(apiKey);
+  } else if (apiKey.startsWith("Basic ")) {
+    authHeader = apiKey;
+  } else {
+    authHeader = apiKey;
   }
 
   const env = props.getProperty("T212_ENV") || "live";
@@ -171,7 +188,7 @@ function syncTrading212Orders() {
       const response = UrlFetchApp.fetch(url, {
         method: "GET",
         headers: {
-          "Authorization": apiKey,
+          "Authorization": authHeader,
           "User-Agent": "Antigravity-PortfolioTracker/1.0"
         },
         muteHttpExceptions: true
@@ -179,7 +196,7 @@ function syncTrading212Orders() {
 
       const statusCode = response.getResponseCode();
       if (statusCode === 401 || statusCode === 403) {
-        throw new Error(`Authentication failed (HTTP ${statusCode}). Verify that your API key is correct and has 'History' permissions enabled.`);
+        throw new Error(`Authentication failed (HTTP ${statusCode}). Verify that your API Key ID and Secret Key are correct and have 'History' permissions enabled.`);
       } else if (statusCode === 429) {
         throw new Error("Rate limit exceeded from Trading 212. Please wait a minute and retry.");
       } else if (statusCode !== 200) {
@@ -194,14 +211,10 @@ function syncTrading212Orders() {
 
       for (const order of items) {
         const orderId = String(order.id || "").trim();
-        if (orderId && existingOrderIds.has(orderId)) {
-          continue;
-        }
+        if (orderId && existingOrderIds.has(orderId)) continue;
 
         const status = (order.status || "").toUpperCase();
-        if (status !== "FILLED" && status !== "EXECUTED" && !order.dateExecuted) {
-          continue;
-        }
+        if (status !== "FILLED" && status !== "EXECUTED" && !order.dateExecuted) continue;
 
         const filledQty = parseFloat(order.filledQuantity || order.orderedQuantity || 0);
         if (isNaN(filledQty) || filledQty === 0) continue;
@@ -217,9 +230,7 @@ function syncTrading212Orders() {
         const cleanSymbol = rawTicker.replace(/_[A-Z]{2}_EQ$/i, "").toUpperCase();
 
         const signature = `${execDate}_${cleanSymbol}_${isBuy ? "BUY" : "SELL"}_${absQty}`;
-        if (existingSignatures.has(signature)) {
-          continue;
-        }
+        if (existingSignatures.has(signature)) continue;
 
         const currency = (order.currencyCode || order.currency || "USD").toUpperCase();
         let fee = 0.0;
@@ -244,10 +255,7 @@ function syncTrading212Orders() {
         allInPageAlreadyKnown = false;
       }
 
-      if (allInPageAlreadyKnown && items.length > 0) {
-        break;
-      }
-
+      if (allInPageAlreadyKnown && items.length > 0) break;
       nextPath = payload.nextPagePath || null;
     }
 
@@ -261,27 +269,21 @@ function syncTrading212Orders() {
 
       const msg = `Added ${newTrades.length} new trades from Trading 212 into your sheet.`;
       Logger.log(msg);
-      if (ui) {
-        ui.alert(`✅ Trading 212 Sync Complete!\n\n${msg}`);
-      }
+      if (ui) ui.alert(`✅ Trading 212 Sync Complete!\n\n${msg}`);
     } else {
       Logger.log("Up to date: No new Trading 212 trades found.");
-      if (ui) {
-        ui.alert("ℹ️ Up to date: No new Trading 212 trades found.");
-      }
+      if (ui) ui.alert("ℹ️ Up to date: No new Trading 212 trades found.");
     }
 
   } catch (err) {
     Logger.log(`Trading 212 Sync Error: ${err.message}`);
-    if (ui) {
-      ui.alert(`❌ Trading 212 Sync Error:\n\n${err.message}`);
-    }
+    if (ui) ui.alert(`❌ Trading 212 Sync Error:\n\n${err.message}`);
   }
 }
 
 // ============================================================================
 // ACTION 2: CSV EXPORT (Google Sheet -> Google Drive CSV)
-// Completely independent: runs on edit, does NOT call broker sync
+// Completely independent: runs on edit/trigger, does NOT call broker sync
 // ============================================================================
 function autoExportToCSV() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];

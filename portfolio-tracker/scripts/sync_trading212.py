@@ -6,17 +6,17 @@ Queries the Trading 212 Public API (Invest / Stocks ISA) for historical orders,
 verifies API credentials, and outputs formatted orders for inspection or manual
 copy-paste into Google Sheets.
 
+Trading 212 uses HTTP Basic Authentication with:
+- API Key ID (Username)
+- Secret Key (Password)
+Pass either via --api-key and --api-secret, or as --api-key "KEY_ID:SECRET".
+
 NOTE: Do NOT write directly to 'portfolio_docker_sync.csv'!
 Google Sheets is the single source of truth for the portfolio ledger.
-Google Sheets contains an automated Apps Script action that exports its data
-to 'portfolio_docker_sync.csv' in Google Drive. Writing to the local CSV directly
-bypasses the sheet ledger and will be overwritten on the next sheet export.
-
-To automatically sync Trading 212 orders into Google Sheets, use the Apps Script
-function in `portfolio-tracker/apps-script/Code.gs` directly from your sheet.
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -47,8 +47,23 @@ def clean_ticker_symbol(raw_ticker: str) -> str:
     return cleaned.upper()
 
 
+def build_auth_header(api_key: str, api_secret: Optional[str] = None) -> str:
+    """Construct HTTP Basic Authentication header for Trading 212."""
+    if api_secret:
+        combined = f"{api_key.strip()}:{api_secret.strip()}"
+        encoded = base64.b64encode(combined.encode("utf-8")).decode("utf-8")
+        return f"Basic {encoded}"
+    elif ":" in api_key:
+        encoded = base64.b64encode(api_key.strip().encode("utf-8")).decode("utf-8")
+        return f"Basic {encoded}"
+    elif api_key.startswith("Basic "):
+        return api_key.strip()
+    return api_key.strip()
+
+
 def fetch_historical_orders(
     api_key: str,
+    api_secret: Optional[str] = None,
     demo: bool = False,
     limit: int = 50,
     max_pages: int = 5,
@@ -63,13 +78,14 @@ def fetch_historical_orders(
     if ticker:
         next_path += f"&ticker={ticker}"
 
-    page = 0
+    auth_header = build_auth_header(api_key, api_secret)
     headers = {
-        "Authorization": api_key,
+        "Authorization": auth_header,
         "User-Agent": "Antigravity-Trading212-Sync/1.0",
         "Accept": "application/json"
     }
 
+    page = 0
     while next_path and page < max_pages:
         page += 1
         url = next_path if next_path.startswith("http") else f"{base_url}{next_path}"
@@ -83,7 +99,7 @@ def fetch_historical_orders(
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                print(f"[ERROR] Authentication failed (HTTP {e.code}). Verify API key and 'History' permissions.", file=sys.stderr)
+                print(f"[ERROR] Authentication failed (HTTP {e.code}). Verify API Key ID and Secret Key.", file=sys.stderr)
             elif e.code == 429:
                 print("[WARNING] Trading 212 rate limit reached (20 req/min). Backing off.", file=sys.stderr)
             else:
@@ -179,7 +195,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Inspect and verify executed trades from Trading 212 API"
     )
-    parser.add_argument("--api-key", default=os.getenv("TRADING212_API_KEY"), help="Trading 212 API Key (or set TRADING212_API_KEY env)")
+    parser.add_argument("--api-key", default=os.getenv("TRADING212_API_KEY"), help="Trading 212 API Key ID (or KEY_ID:SECRET)")
+    parser.add_argument("--api-secret", default=os.getenv("TRADING212_API_SECRET"), help="Trading 212 Secret Key")
     parser.add_argument("--demo", action="store_true", help="Use Trading 212 Practice / Demo environment")
     parser.add_argument("--limit", type=int, default=50, help="Max orders to fetch per request (default: 50)")
     parser.add_argument("--max-pages", type=int, default=5, help="Max pagination depth (default: 5)")
@@ -190,12 +207,13 @@ def main():
     args = parser.parse_args()
 
     if not args.api_key:
-        print("[ERROR] Trading 212 API key is required. Supply via --api-key or set TRADING212_API_KEY env.", file=sys.stderr)
+        print("[ERROR] Trading 212 API Key ID is required. Supply via --api-key or set TRADING212_API_KEY env.", file=sys.stderr)
         sys.exit(1)
 
     print(f"[*] Fetching historical orders from Trading 212 ({'DEMO' if args.demo else 'LIVE'})...", file=sys.stderr)
     orders = fetch_historical_orders(
         api_key=args.api_key,
+        api_secret=args.api_secret,
         demo=args.demo,
         limit=args.limit,
         max_pages=args.max_pages,

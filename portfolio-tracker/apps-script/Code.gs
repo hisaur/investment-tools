@@ -333,9 +333,26 @@ function syncTrading212Orders() {
           execDate = Utilities.formatDate(new Date(), "UTC", "yyyy-MM-dd");
         }
 
-        // Clean Ticker Symbol (strip exchange suffixes: _US_EQ, _UK_EQ, _DE_EQ, _FR_EQ, etc.)
-        const rawTicker = String(orderObj.ticker || item.ticker || "");
-        const cleanSymbol = rawTicker.replace(/_[A-Z]{2}_EQ$/i, "").toUpperCase();
+        // Clean Ticker Symbol (normalize to Yahoo Finance ticker format)
+        const rawTicker = String(orderObj.ticker || item.ticker || "").toUpperCase();
+        let cleanSymbol = rawTicker;
+        if (cleanSymbol === "ANTM") {
+          cleanSymbol = "ELV";
+        } else if (cleanSymbol === "013CD_EQ" || cleanSymbol === "013C.DE" || cleanSymbol === "013C") {
+          cleanSymbol = "013C.F";
+        } else if (cleanSymbol === "HOP_EQ" || cleanSymbol === "HOP.PA" || cleanSymbol === "HOP") {
+          cleanSymbol = "HO.PA";
+        } else if (cleanSymbol.endsWith("P_EQ")) {
+          cleanSymbol = cleanSymbol.slice(0, -4) + ".PA";
+        } else if (cleanSymbol.endsWith("A_EQ")) {
+          cleanSymbol = cleanSymbol.slice(0, -4) + ".AS";
+        } else if (cleanSymbol.endsWith("D_EQ")) {
+          cleanSymbol = cleanSymbol.slice(0, -4) + ".DE";
+        } else if (cleanSymbol.endsWith("L_EQ")) {
+          cleanSymbol = cleanSymbol.slice(0, -4) + ".L";
+        } else {
+          cleanSymbol = cleanSymbol.replace(/_[A-Z]{2}_EQ$/i, "").replace(/_EQ$/i, "");
+        }
         if (!cleanSymbol) continue;
 
         // Deduplication signature fallback

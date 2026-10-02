@@ -213,22 +213,26 @@ def normalize_symbol_for_ghostfolio(symbol: str) -> str:
         return ""
     sym = symbol.strip().upper()
 
-    # Known ticker renames / corporate actions
+    # Known ticker renames / corporate actions / specific exchange symbols
     if sym == "ANTM":
         return "ELV"
+    if sym in ("013CD_EQ", "013C.DE", "013C", "GF_013C_DE"):
+        return "013C.F"
+    if sym in ("HOP_EQ", "HOP.PA", "HOP"):
+        return "HO.PA"
 
     # European exchange suffixes from Trading 212
-    if sym.endswith("D_EQ"):
-        # German Xetra / Frankfurt (e.g. AMDD_EQ -> AMD.DE, MSFD_EQ -> MSF.DE)
-        return sym[:-4] + ".DE"
-    if sym.endswith("A_EQ"):
-        # Euronext Amsterdam (e.g. ADYENA_EQ -> ADYEN.AS, ASMLA_EQ -> ASML.AS)
-        return sym[:-4] + ".AS"
+    # P_EQ: Euronext Paris (e.g. VIEP_EQ -> VIE.PA)
     if sym.endswith("P_EQ"):
-        # Euronext Paris (e.g. VIEP_EQ -> VIE.PA)
         return sym[:-4] + ".PA"
+    # A_EQ: Euronext Amsterdam (e.g. ADYENA_EQ -> ADYEN.AS, ASMLA_EQ -> ASML.AS)
+    if sym.endswith("A_EQ"):
+        return sym[:-4] + ".AS"
+    # D_EQ: German Xetra / Frankfurt (e.g. AMDD_EQ -> AMD.DE, MSFD_EQ -> MSF.DE)
+    if sym.endswith("D_EQ"):
+        return sym[:-4] + ".DE"
+    # L_EQ: London Stock Exchange (e.g. VODL_EQ -> VOD.L)
     if sym.endswith("L_EQ"):
-        # London Stock Exchange (e.g. VODL_EQ -> VOD.L)
         return sym[:-4] + ".L"
     if sym.endswith("_US_EQ"):
         return sym[:-6]

@@ -1,11 +1,17 @@
 /**
- * Google Apps Script: Multi-Broker Google Sheet to Drive CSV Ingestion
- * with Dynamic Trading 212 API Sync
+ * Google Apps Script: Portfolio Ingestion & Export Suite
+ * -------------------------------------------------------
+ * Contains two completely decoupled, independent actions:
  * 
- * Target File: portfolio_docker_sync.csv (stored in Google Drive root)
+ * 1. syncTrading212Orders() : Broker -> Google Sheet
+ *    Queries Trading 212 API and appends new trades into the sheet ledger.
+ *    Does NOT call autoExportToCSV.
+ * 
+ * 2. autoExportToCSV()      : Google Sheet -> Google Drive CSV
+ *    Exports current sheet data to portfolio_docker_sync.csv.
+ *    Triggered by sheet edits / manual trigger. Does NOT call broker sync.
  */
 
-const SYNC_FILE_NAME = "portfolio_docker_sync.csv";
 const T212_LIVE_BASE_URL = "https://live.trading212.com/api/v0";
 const T212_DEMO_BASE_URL = "https://demo.trading212.com/api/v0";
 
@@ -15,9 +21,8 @@ const T212_DEMO_BASE_URL = "https://demo.trading212.com/api/v0";
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("📊 Ghostfolio Sync")
-    .addItem("📥 Sync Trading 212 Trades (Dynamic)", "syncTrading212Orders")
-    .addSeparator()
-    .addItem("📤 Export Now to Drive CSV", "autoExportToCSV")
+    .addItem("📥 Sync Trading 212 Trades", "syncTrading212Orders")
+    .addItem("📤 Export Sheet to Drive CSV", "autoExportToCSV")
     .addSeparator()
     .addItem("⚙️ Set Trading 212 API Key", "setTrading212ApiKey")
     .addItem("🔄 Toggle Demo / Live Mode", "toggleTrading212Environment")
@@ -25,7 +30,7 @@ function onOpen() {
 }
 
 /**
- * Safely gets UI (returns null if running headlessly via automated trigger).
+ * Safely gets UI (returns null when running headlessly via automated triggers).
  */
 function getUiSafely() {
   try {
@@ -36,14 +41,13 @@ function getUiSafely() {
 }
 
 /**
- * Prompts the user to enter their Trading 212 API Key.
- * Stored securely in UserProperties (never in cells or code).
+ * Prompts user to enter Trading 212 API Key and saves it in UserProperties.
  */
 function setTrading212ApiKey() {
   const ui = SpreadsheetApp.getUi();
   const response = ui.prompt(
     "Trading 212 API Configuration",
-    "Enter your Trading 212 API Key (ensure 'History' permissions are checked in T212 settings):",
+    "Enter your Trading 212 API Key (ensure 'History' permission is checked in T212):",
     ui.ButtonSet.OK_CANCEL
   );
 
@@ -51,7 +55,7 @@ function setTrading212ApiKey() {
     const key = response.getResponseText().trim();
     if (key) {
       PropertiesService.getUserProperties().setProperty("T212_API_KEY", key);
-      ui.alert("✅ Trading 212 API Key stored securely in Google User Properties!");
+      ui.alert("✅ Trading 212 API Key saved securely in Google User Properties!");
     } else {
       ui.alert("⚠️ API key cannot be empty.");
     }
@@ -59,21 +63,20 @@ function setTrading212ApiKey() {
 }
 
 /**
- * Toggles between Live and Demo (Practice) Trading 212 environments.
+ * Toggles between Live and Demo (Practice) environments.
  */
 function toggleTrading212Environment() {
   const props = PropertiesService.getUserProperties();
   const current = props.getProperty("T212_ENV") || "live";
   const next = current === "live" ? "demo" : "live";
   props.setProperty("T212_ENV", next);
-  SpreadsheetApp.getUi().alert(`Trading 212 environment is now set to: ${next.toUpperCase()}`);
+  SpreadsheetApp.getUi().alert(`Trading 212 environment is now: ${next.toUpperCase()}`);
 }
 
-/**
- * Fetches recent filled orders from Trading 212 API and appends new trades into the sheet.
- * Only rows with Broker == 'Trading212' are synced; all other brokers are untouched.
- * Automatically triggers autoExportToCSV() after appending new trades.
- */
+// ============================================================================
+// ACTION 1: BROKER SYNC (Trading 212 -> Google Sheet)
+// Completely independent: does NOT call autoExportToCSV
+// ============================================================================
 function syncTrading212Orders() {
   const ui = getUiSafely();
   const props = PropertiesService.getUserProperties();
@@ -88,10 +91,7 @@ function syncTrading212Orders() {
       );
       if (promptResp.getSelectedButton() !== ui.Button.OK) return;
       apiKey = promptResp.getResponseText().trim();
-      if (!apiKey) {
-        ui.alert("Sync aborted: No API Key provided.");
-        return;
-      }
+      if (!apiKey) return;
       props.setProperty("T212_API_KEY", apiKey);
     } else {
       Logger.log("Trading 212 sync aborted: No API key found in UserProperties.");
@@ -259,15 +259,10 @@ function syncTrading212Orders() {
       const range = sheet.getRange(startRow, 1, newTrades.length, headers.length);
       range.setValues(newTrades);
 
-      Logger.log(`Successfully added ${newTrades.length} new Trading 212 trades.`);
-
-      // 5. Auto-export to Drive CSV using your existing function!
-      autoExportToCSV();
-
-      const msg = `Added ${newTrades.length} new trades from Trading 212.\nExported latest portfolio_docker_sync.csv to Google Drive.`;
+      const msg = `Added ${newTrades.length} new trades from Trading 212 into your sheet.`;
       Logger.log(msg);
       if (ui) {
-        ui.alert(`✅ Sync Complete!\n\n${msg}`);
+        ui.alert(`✅ Trading 212 Sync Complete!\n\n${msg}`);
       }
     } else {
       Logger.log("Up to date: No new Trading 212 trades found.");
@@ -284,9 +279,10 @@ function syncTrading212Orders() {
   }
 }
 
-/**
- * Exports the active sheet data to portfolio_docker_sync.csv in Google Drive root.
- */
+// ============================================================================
+// ACTION 2: CSV EXPORT (Google Sheet -> Google Drive CSV)
+// Completely independent: runs on edit, does NOT call broker sync
+// ============================================================================
 function autoExportToCSV() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
   var data = sheet.getDataRange().getValues();
@@ -304,9 +300,4 @@ function autoExportToCSV() {
   } else {
     DriveApp.createFile(fileName, csvContent, MimeType.CSV);
   }
-}
-
-// Backward compatibility alias
-function exportToDriveCSV() {
-  autoExportToCSV();
 }

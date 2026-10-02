@@ -1,20 +1,31 @@
 /**
  * Google Apps Script: Portfolio Ingestion & Export Suite
  * -------------------------------------------------------
- * Two independent actions in a single file:
- * 1. syncTrading212Orders() : Broker -> Google Sheet (Does NOT call export)
- * 2. autoExportToCSV()      : Google Sheet -> Drive CSV (Does NOT call broker sync)
+ * Verified against official Trading 212 Public API (v0) specification.
  *
  * AUTHENTICATION:
- * Trading 212 uses HTTP Basic Authentication: Base64(API_KEY_ID:SECRET_KEY).
- * Credentials are stored safely in Google UserProperties (never in sheet cells).
+ * Trading 212 uses HTTP Basic Authentication:
+ * Authorization: Basic Base64(API_KEY_ID:SECRET_KEY)
+ * Credentials are stored securely in private UserProperties (never in cells).
+ *
+ * ENDPOINTS & SCHEMA (Trading 212 v0):
+ * - History: GET /equity/history/orders?limit=50
+ * - Structure per item:
+ *     item.order: { id, ticker, status, type, side, filledValue, createdAt }
+ *     item.fill:  { quantity, price, filledAt, walletImpact: { taxes } }
+ * - Account: GET /equity/account/info -> { id, currencyCode }
+ *
+ * ACTIONS:
+ * 1. syncTrading212Orders() : Broker API -> Google Sheet ledger
+ * 2. autoExportToCSV()      : Google Sheet ledger -> Drive CSV (runs on edit)
+ * Both actions are completely decoupled and do NOT call each other.
  */
 
 const T212_LIVE_BASE_URL = "https://live.trading212.com/api/v0";
 const T212_DEMO_BASE_URL = "https://demo.trading212.com/api/v0";
 
 /**
- * Custom menu to trigger either action or configure settings independently
+ * Creates custom menu in Google Sheets UI when spreadsheet opens.
  */
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -32,16 +43,15 @@ function getUiSafely() {
 }
 
 /**
- * Prompts user to enter both API Key ID and Secret Key,
- * saving them securely into private UserProperties.
+ * Prompts user for API Key ID and Secret Key, saving to UserProperties.
  */
 function setTrading212ApiKey() {
   const ui = SpreadsheetApp.getUi();
   const props = PropertiesService.getUserProperties();
 
   const idResp = ui.prompt(
-    "Trading 212 Setup (Step 1 of 2)",
-    "Enter your Trading 212 API Key ID (or paste 'KEY_ID:SECRET' here):",
+    "Trading 212 Configuration (Step 1 of 2)",
+    "Enter your Trading 212 API Key ID (or paste 'KEY_ID:SECRET'):",
     ui.ButtonSet.OK_CANCEL
   );
   if (idResp.getSelectedButton() !== ui.Button.OK) return;
@@ -60,8 +70,8 @@ function setTrading212ApiKey() {
     secretKey = parts.slice(1).join(":").trim();
   } else {
     const secResp = ui.prompt(
-      "Trading 212 Setup (Step 2 of 2)",
-      "Enter your Trading 212 Secret Key (shown once upon creation):",
+      "Trading 212 Configuration (Step 2 of 2)",
+      "Enter your Trading 212 Secret Key (from Settings > API Beta):",
       ui.ButtonSet.OK_CANCEL
     );
     if (secResp.getSelectedButton() !== ui.Button.OK) return;
@@ -82,9 +92,33 @@ function toggleTrading212Environment() {
   SpreadsheetApp.getUi().alert(`Trading 212 environment is now: ${next.toUpperCase()}`);
 }
 
+/**
+ * Fetches the account default currency from /equity/account/info
+ */
+function fetchT212AccountCurrency(baseUrl, authHeader) {
+  try {
+    const resp = UrlFetchApp.fetch(`${baseUrl}/equity/account/info`, {
+      method: "GET",
+      headers: {
+        "Authorization": authHeader,
+        "Accept": "application/json"
+      },
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() === 200) {
+      const data = JSON.parse(resp.getContentText());
+      return (data.currencyCode || data.currency || "USD").toUpperCase();
+    }
+  } catch (e) {
+    Logger.log("Could not fetch account info currency: " + e.message);
+  }
+  return "USD";
+}
+
 // ============================================================================
 // ACTION 1: BROKER SYNC (Trading 212 -> Google Sheet)
-// Completely independent: does NOT call autoExportToCSV
+// Verified against Trading 212 API v0 order history specification.
+// Completely independent: does NOT call autoExportToCSV.
 // ============================================================================
 function syncTrading212Orders() {
   const ui = getUiSafely();
@@ -118,6 +152,9 @@ function syncTrading212Orders() {
 
   const env = props.getProperty("T212_ENV") || "live";
   const baseUrl = env === "demo" ? T212_DEMO_BASE_URL : T212_LIVE_BASE_URL;
+
+  // Query default account currency as fallback
+  const defaultCurrency = fetchT212AccountCurrency(baseUrl, authHeader);
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheets()[0];
@@ -189,6 +226,7 @@ function syncTrading212Orders() {
         method: "GET",
         headers: {
           "Authorization": authHeader,
+          "Accept": "application/json",
           "User-Agent": "Antigravity-PortfolioTracker/1.0"
         },
         muteHttpExceptions: true
@@ -196,9 +234,9 @@ function syncTrading212Orders() {
 
       const statusCode = response.getResponseCode();
       if (statusCode === 401 || statusCode === 403) {
-        throw new Error(`Authentication failed (HTTP ${statusCode}). Verify that your API Key ID and Secret Key are correct and have 'History' permissions enabled.`);
+        throw new Error(`Authentication failed (HTTP ${statusCode}). Verify that your API Key ID and Secret Key are correct and that 'History' permissions are enabled in Trading 212 settings.`);
       } else if (statusCode === 429) {
-        throw new Error("Rate limit exceeded from Trading 212. Please wait a minute and retry.");
+        throw new Error("Rate limit exceeded from Trading 212 (max 20 req/min for history). Please wait a moment and retry.");
       } else if (statusCode !== 200) {
         throw new Error(`Trading 212 API error (HTTP ${statusCode}): ${response.getContentText()}`);
       }
@@ -209,35 +247,78 @@ function syncTrading212Orders() {
 
       let allInPageAlreadyKnown = true;
 
-      for (const order of items) {
-        const orderId = String(order.id || "").trim();
-        if (orderId && existingOrderIds.has(orderId)) continue;
+      for (const item of items) {
+        // T212 Schema: fields can be nested under item.order and item.fill, or at top level
+        const orderObj = item.order || item;
+        const fillObj = item.fill || item;
+        const walletObj = (fillObj.walletImpact) || item.walletImpact || {};
 
-        const status = (order.status || "").toUpperCase();
-        if (status !== "FILLED" && status !== "EXECUTED" && !order.dateExecuted) continue;
-
-        const filledQty = parseFloat(order.filledQuantity || order.orderedQuantity || 0);
-        if (isNaN(filledQty) || filledQty === 0) continue;
-
-        const isBuy = filledQty > 0;
-        const absQty = Math.abs(filledQty);
-        const fillPrice = parseFloat(order.fillPrice || (order.filledValue ? order.filledValue / absQty : 0));
-
-        const execDateRaw = order.dateExecuted || order.dateCreated;
-        const execDate = execDateRaw ? Utilities.formatDate(new Date(execDateRaw), "UTC", "yyyy-MM-dd") : Utilities.formatDate(new Date(), "UTC", "yyyy-MM-dd");
-
-        const rawTicker = String(order.ticker || "");
-        const cleanSymbol = rawTicker.replace(/_[A-Z]{2}_EQ$/i, "").toUpperCase();
-
-        const signature = `${execDate}_${cleanSymbol}_${isBuy ? "BUY" : "SELL"}_${absQty}`;
-        if (existingSignatures.has(signature)) continue;
-
-        const currency = (order.currencyCode || order.currency || "USD").toUpperCase();
-        let fee = 0.0;
-        if (Array.isArray(order.taxes)) {
-          fee = order.taxes.reduce((sum, t) => sum + (parseFloat(t.fillCost) || 0.0), 0.0);
+        const orderId = String(orderObj.id || item.id || "").trim();
+        if (orderId && existingOrderIds.has(orderId)) {
+          continue; // Already processed
         }
 
+        // Status check: only process filled orders
+        const status = String(orderObj.status || item.status || "").toUpperCase();
+        if (status !== "FILLED" && status !== "EXECUTED" && status !== "PARTIALLY_FILLED" && !fillObj.filledAt && !orderObj.dateExecuted) {
+          continue;
+        }
+
+        // Quantity: fill.quantity, order.filledQuantity, or fallback
+        let rawQty = fillObj.quantity !== undefined ? fillObj.quantity : 
+                     (orderObj.filledQuantity !== undefined ? orderObj.filledQuantity : 
+                     (orderObj.orderedQuantity !== undefined ? orderObj.orderedQuantity : item.quantity));
+        let numQty = parseFloat(rawQty || 0);
+        if (isNaN(numQty) || numQty === 0) continue;
+
+        // Buy vs Sell determination:
+        // In T212: positive quantity is BUY, negative is SELL. Also order.side or order.type may specify BUY/SELL.
+        const sideStr = String(orderObj.side || fillObj.side || orderObj.type || "").toUpperCase();
+        const isSell = (numQty < 0) || sideStr === "SELL" || sideStr.includes("SELL");
+        const isBuy = !isSell;
+        const absQty = Math.abs(numQty);
+
+        // Price per share
+        let fillPrice = parseFloat(fillObj.price || orderObj.fillPrice || item.fillPrice || 0);
+        if ((isNaN(fillPrice) || fillPrice === 0) && (orderObj.filledValue || item.filledValue) && absQty > 0) {
+          fillPrice = Math.abs(parseFloat(orderObj.filledValue || item.filledValue) / absQty);
+        }
+
+        // Execution Date
+        const execDateRaw = fillObj.filledAt || orderObj.dateExecuted || orderObj.createdAt || item.dateExecuted || item.dateCreated;
+        let execDate = "";
+        if (execDateRaw) {
+          try {
+            execDate = Utilities.formatDate(new Date(execDateRaw), "UTC", "yyyy-MM-dd");
+          } catch (e) {
+            execDate = String(execDateRaw).substring(0, 10);
+          }
+        } else {
+          execDate = Utilities.formatDate(new Date(), "UTC", "yyyy-MM-dd");
+        }
+
+        // Clean Ticker Symbol (strip exchange suffixes: _US_EQ, _UK_EQ, _DE_EQ, _FR_EQ, etc.)
+        const rawTicker = String(orderObj.ticker || item.ticker || "");
+        const cleanSymbol = rawTicker.replace(/_[A-Z]{2}_EQ$/i, "").toUpperCase();
+        if (!cleanSymbol) continue;
+
+        // Deduplication signature fallback
+        const signature = `${execDate}_${cleanSymbol}_${isBuy ? "BUY" : "SELL"}_${absQty}`;
+        if (existingSignatures.has(signature)) {
+          continue;
+        }
+
+        // Currency
+        const currency = String(orderObj.currency || fillObj.currency || item.currencyCode || item.currency || defaultCurrency).toUpperCase();
+
+        // Fees / Taxes
+        let fee = 0.0;
+        const taxes = walletObj.taxes || item.taxes;
+        if (Array.isArray(taxes)) {
+          fee = taxes.reduce((sum, t) => sum + (parseFloat(t.fillCost || t.quantity || 0.0) || 0.0), 0.0);
+        }
+
+        // Build standard row
         const newRow = new Array(headers.length).fill("");
         newRow[colIndex.date] = execDate;
         newRow[colIndex.type] = isBuy ? "BUY" : "SELL";
@@ -255,7 +336,10 @@ function syncTrading212Orders() {
         allInPageAlreadyKnown = false;
       }
 
-      if (allInPageAlreadyKnown && items.length > 0) break;
+      if (allInPageAlreadyKnown && items.length > 0) {
+        break; // Reached already-synchronized history
+      }
+
       nextPath = payload.nextPagePath || null;
     }
 
@@ -267,7 +351,7 @@ function syncTrading212Orders() {
       const range = sheet.getRange(startRow, 1, newTrades.length, headers.length);
       range.setValues(newTrades);
 
-      const msg = `Added ${newTrades.length} new trades from Trading 212 into your sheet.`;
+      const msg = `Successfully added ${newTrades.length} new trades from Trading 212 into your sheet.`;
       Logger.log(msg);
       if (ui) ui.alert(`✅ Trading 212 Sync Complete!\n\n${msg}`);
     } else {

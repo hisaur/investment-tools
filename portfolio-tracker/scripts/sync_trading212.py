@@ -61,6 +61,24 @@ def build_auth_header(api_key: str, api_secret: Optional[str] = None) -> str:
     return api_key.strip()
 
 
+def fetch_account_currency(base_url: str, auth_header: str) -> str:
+    """Query /equity/account/info to get the base account currency."""
+    url = f"{base_url}/equity/account/info"
+    req = urllib.request.Request(url, headers={
+        "Authorization": auth_header,
+        "Accept": "application/json",
+        "User-Agent": "Antigravity-Trading212-Sync/1.0"
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                return str(data.get("currencyCode") or data.get("currency") or "USD").upper()
+    except Exception:
+        pass
+    return "USD"
+
+
 def fetch_historical_orders(
     api_key: str,
     api_secret: Optional[str] = None,
@@ -71,6 +89,7 @@ def fetch_historical_orders(
 ) -> List[Dict[str, Any]]:
     """
     Fetch executed orders from Trading 212 API handling cursor pagination.
+    Handles both nested schema ({order: ..., fill: ...}) and flat schema.
     """
     base_url = DEMO_BASE_URL if demo else LIVE_BASE_URL
     orders: List[Dict[str, Any]] = []
@@ -84,6 +103,8 @@ def fetch_historical_orders(
         "User-Agent": "Antigravity-Trading212-Sync/1.0",
         "Accept": "application/json"
     }
+
+    default_currency = fetch_account_currency(base_url, auth_header)
 
     page = 0
     while next_path and page < max_pages:
@@ -99,9 +120,9 @@ def fetch_historical_orders(
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                print(f"[ERROR] Authentication failed (HTTP {e.code}). Verify API Key ID and Secret Key.", file=sys.stderr)
+                print(f"[ERROR] Authentication failed (HTTP {e.code}). Verify API Key ID and Secret Key, and ensure 'History' permissions are checked.", file=sys.stderr)
             elif e.code == 429:
-                print("[WARNING] Trading 212 rate limit reached (20 req/min). Backing off.", file=sys.stderr)
+                print("[WARNING] Trading 212 rate limit reached (20 req/min for history). Backing off.", file=sys.stderr)
             else:
                 print(f"[ERROR] HTTP Error {e.code}: {e.reason}", file=sys.stderr)
             break
@@ -114,37 +135,72 @@ def fetch_historical_orders(
             break
 
         for itm in items:
-            status = str(itm.get("status", "")).upper()
-            if status not in ("FILLED", "EXECUTED") and not itm.get("dateExecuted"):
+            # T212 Schema: support nested order/fill or flat
+            order_obj = itm.get("order") if isinstance(itm.get("order"), dict) else itm
+            fill_obj = itm.get("fill") if isinstance(itm.get("fill"), dict) else itm
+            wallet_obj = fill_obj.get("walletImpact") if isinstance(fill_obj.get("walletImpact"), dict) else {}
+
+            status = str(order_obj.get("status") or itm.get("status") or "").upper()
+            if status not in ("FILLED", "EXECUTED", "PARTIALLY_FILLED") and not fill_obj.get("filledAt") and not order_obj.get("dateExecuted"):
                 continue
 
-            qty = float(itm.get("filledQuantity") or itm.get("orderedQuantity") or 0.0)
-            if qty == 0:
+            raw_qty = fill_obj.get("quantity") if fill_obj.get("quantity") is not None else (
+                order_obj.get("filledQuantity") if order_obj.get("filledQuantity") is not None else (
+                    order_obj.get("orderedQuantity") if order_obj.get("orderedQuantity") is not None else itm.get("quantity")
+                )
+            )
+            try:
+                num_qty = float(raw_qty or 0.0)
+            except (ValueError, TypeError):
+                num_qty = 0.0
+
+            if num_qty == 0:
                 continue
 
-            is_buy = qty > 0
-            abs_qty = abs(qty)
-            price = float(itm.get("fillPrice") or 0.0)
-            if price == 0 and itm.get("filledValue"):
-                price = float(itm.get("filledValue")) / abs_qty
+            side_str = str(order_obj.get("side") or fill_obj.get("side") or order_obj.get("type") or "").upper()
+            is_sell = (num_qty < 0) or side_str == "SELL" or "SELL" in side_str
+            is_buy = not is_sell
+            abs_qty = abs(num_qty)
 
-            raw_date = itm.get("dateExecuted") or itm.get("dateCreated") or ""
+            price = 0.0
+            raw_price = fill_obj.get("price") or order_obj.get("fillPrice") or itm.get("fillPrice")
+            if raw_price:
+                try:
+                    price = float(raw_price)
+                except (ValueError, TypeError):
+                    price = 0.0
+
+            if price == 0 and (order_obj.get("filledValue") or itm.get("filledValue")) and abs_qty > 0:
+                try:
+                    val = float(order_obj.get("filledValue") or itm.get("filledValue") or 0.0)
+                    price = abs(val / abs_qty)
+                except Exception:
+                    pass
+
+            raw_date = fill_obj.get("filledAt") or order_obj.get("dateExecuted") or order_obj.get("createdAt") or itm.get("dateExecuted") or itm.get("dateCreated") or ""
             date_str = ""
             if raw_date:
                 try:
-                    dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
                     date_str = dt.strftime("%Y-%m-%d")
                 except Exception:
-                    date_str = raw_date[:10]
+                    date_str = str(raw_date)[:10]
 
-            symbol = clean_ticker_symbol(itm.get("ticker", ""))
-            curr = str(itm.get("currencyCode") or itm.get("currency") or "USD").upper()
+            raw_ticker = str(order_obj.get("ticker") or itm.get("ticker") or "")
+            symbol = clean_ticker_symbol(raw_ticker)
+            if not symbol:
+                continue
+
+            curr = str(order_obj.get("currency") or fill_obj.get("currency") or itm.get("currencyCode") or itm.get("currency") or default_currency).upper()
 
             fee = 0.0
-            taxes = itm.get("taxes") or []
+            taxes = wallet_obj.get("taxes") or itm.get("taxes") or []
             if isinstance(taxes, list):
                 for t in taxes:
-                    fee += float(t.get("fillCost") or 0.0)
+                    if isinstance(t, dict):
+                        fee += float(t.get("fillCost") or t.get("quantity") or 0.0)
+
+            order_id = str(order_obj.get("id") or itm.get("id") or "")
 
             orders.append({
                 "Date": date_str,
@@ -155,7 +211,7 @@ def fetch_historical_orders(
                 "Currency": curr,
                 "Fee": round(fee, 2),
                 "Broker": "Trading212",
-                "OrderId": str(itm.get("id", ""))
+                "OrderId": order_id
             })
 
         next_path = data.get("nextPagePath")

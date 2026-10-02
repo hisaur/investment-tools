@@ -1,0 +1,54 @@
+# =================================================================
+# Git Ignore - Value Investing & Portfolio Suite (Monorepo Plugin)
+# =================================================================
+
+# 1. Environment & Secret Credentials (NEVER commit live secrets)
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# 2. Financial Data & CSV Transactions (NEVER commit actual portfolio transactions)
+*.csv
+portfolio_docker_sync.csv
+data/
+postgres_data/
+docker-volumes/
+
+# 3. Python Artifacts & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# 4. Reports, Telemetry, Logs & Scratch Output
+reports/
+scratch/
+*.docx
+*.tmp
+*.db
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.contextune/
+node_modules/
+
+# 5. OS & IDE Artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+

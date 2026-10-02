@@ -1,24 +1,8 @@
 /**
- * Google Apps Script: Ghostfolio Google Sheet to Google Drive CSV Sync
- * with Dynamic Trading 212 API Ingestion & Multi-Broker Support
+ * Google Apps Script: Multi-Broker Google Sheet to Drive CSV Ingestion
+ * with Dynamic Trading 212 API Sync
  * 
- * Target Sheet: https://docs.google.com/spreadsheets/d/<YOUR_SPREADSHEET_ID>/edit
- * Output File: portfolio_docker_sync.csv (stored in Google Drive root)
- *
- * DATA MODEL (Single Tab Hybrid Architecture):
- * Column A: Date        (YYYY-MM-DD)
- * Column B: Type        (BUY | SELL)
- * Column C: Symbol      (e.g. AAPL, MSFT, VIE.PA)
- * Column D: Quantity    (Number of shares)
- * Column E: UnitPrice   (Execution price per share)
- * Column F: Currency    (USD, EUR, GBP, AUD, etc.)
- * Column G: Fee         (Brokerage / transaction fee)
- * Column H: Broker      (e.g. Trading212, IBKR, Schwab, Manual)
- * Column I: OrderId     (Unique broker execution ID for deduplication)
- *
- * DYNAMIC vs. STATIC RULE:
- * - Only rows where Broker == 'Trading212' are dynamically managed / synced from Trading 212 API.
- * - Rows for other brokers (IBKR, Schwab, Manual, etc.) are STATIC and NEVER modified or deleted.
+ * Target File: portfolio_docker_sync.csv (stored in Google Drive root)
  */
 
 const SYNC_FILE_NAME = "portfolio_docker_sync.csv";
@@ -26,14 +10,14 @@ const T212_LIVE_BASE_URL = "https://live.trading212.com/api/v0";
 const T212_DEMO_BASE_URL = "https://demo.trading212.com/api/v0";
 
 /**
- * Creates custom menu in Google Sheets UI for manual triggers and setup.
+ * Creates custom menu in Google Sheets UI when spreadsheet opens.
  */
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("📊 Ghostfolio Sync")
     .addItem("📥 Sync Trading 212 Trades (Dynamic)", "syncTrading212Orders")
     .addSeparator()
-    .addItem("📤 Export Now to Drive CSV", "exportToDriveCSV")
+    .addItem("📤 Export Now to Drive CSV", "autoExportToCSV")
     .addSeparator()
     .addItem("⚙️ Set Trading 212 API Key", "setTrading212ApiKey")
     .addItem("🔄 Toggle Demo / Live Mode", "toggleTrading212Environment")
@@ -41,8 +25,19 @@ function onOpen() {
 }
 
 /**
- * Prompts the user to securely enter their Trading 212 API key.
- * Stored in UserProperties (never committed to code or displayed in cells).
+ * Safely gets UI (returns null if running headlessly via automated trigger).
+ */
+function getUiSafely() {
+  try {
+    return SpreadsheetApp.getUi();
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Prompts the user to enter their Trading 212 API Key.
+ * Stored securely in UserProperties (never in cells or code).
  */
 function setTrading212ApiKey() {
   const ui = SpreadsheetApp.getUi();
@@ -75,21 +70,9 @@ function toggleTrading212Environment() {
 }
 
 /**
- * Helper to safely retrieve Spreadsheet UI, returning null when running
- * headlessly (e.g. from installable time-driven triggers or webhooks).
- */
-function getUiSafely() {
-  try {
-    return SpreadsheetApp.getUi();
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
  * Fetches recent filled orders from Trading 212 API and appends new trades into the sheet.
  * Only rows with Broker == 'Trading212' are synced; all other brokers are untouched.
- * Automatically triggers exportToDriveCSV() after appending new trades.
+ * Automatically triggers autoExportToCSV() after appending new trades.
  */
 function syncTrading212Orders() {
   const ui = getUiSafely();
@@ -128,12 +111,10 @@ function syncTrading212Orders() {
   let headers = values.length > 0 ? values[0].map(h => String(h).trim().toLowerCase()) : [];
   
   if (headers.length === 0 || (headers.length === 1 && headers[0] === "")) {
-    // Empty sheet: initialize standard headers
     const standardHeaders = ["Date", "Type", "Symbol", "Quantity", "UnitPrice", "Currency", "Fee", "Broker", "OrderId"];
     sheet.appendRow(standardHeaders);
     headers = standardHeaders.map(h => h.toLowerCase());
   } else {
-    // Ensure 'broker' and 'orderid' columns are present
     if (!headers.includes("broker")) {
       const nextCol = headers.length + 1;
       sheet.getRange(1, nextCol).setValue("Broker");
@@ -167,7 +148,6 @@ function syncTrading212Orders() {
     if (colIndex.orderId >= 0 && row[colIndex.orderId]) {
       existingOrderIds.add(String(row[colIndex.orderId]).trim());
     }
-    // Backup signature: Date_Symbol_Type_Quantity
     const dVal = row[colIndex.date] instanceof Date ? 
       Utilities.formatDate(row[colIndex.date], "UTC", "yyyy-MM-dd") : String(row[colIndex.date] || "").trim();
     const sym = String(row[colIndex.symbol] || "").trim().toUpperCase();
@@ -182,7 +162,7 @@ function syncTrading212Orders() {
   let nextPath = "/equity/history/orders?limit=50";
   const newTrades = [];
   let pageCount = 0;
-  const maxPages = 10; // Safety guard: max 500 recent orders
+  const maxPages = 5;
 
   try {
     while (nextPath && pageCount < maxPages) {
@@ -215,10 +195,9 @@ function syncTrading212Orders() {
       for (const order of items) {
         const orderId = String(order.id || "").trim();
         if (orderId && existingOrderIds.has(orderId)) {
-          continue; // Already ingested
+          continue;
         }
 
-        // Only process executed/filled orders
         const status = (order.status || "").toUpperCase();
         if (status !== "FILLED" && status !== "EXECUTED" && !order.dateExecuted) {
           continue;
@@ -231,27 +210,23 @@ function syncTrading212Orders() {
         const absQty = Math.abs(filledQty);
         const fillPrice = parseFloat(order.fillPrice || (order.filledValue ? order.filledValue / absQty : 0));
 
-        // Format execution date as YYYY-MM-DD
         const execDateRaw = order.dateExecuted || order.dateCreated;
         const execDate = execDateRaw ? Utilities.formatDate(new Date(execDateRaw), "UTC", "yyyy-MM-dd") : Utilities.formatDate(new Date(), "UTC", "yyyy-MM-dd");
 
-        // Clean ticker symbol (strip _US_EQ, _UK_EQ, _DE_EQ, etc.)
         const rawTicker = String(order.ticker || "");
         const cleanSymbol = rawTicker.replace(/_[A-Z]{2}_EQ$/i, "").toUpperCase();
 
         const signature = `${execDate}_${cleanSymbol}_${isBuy ? "BUY" : "SELL"}_${absQty}`;
         if (existingSignatures.has(signature)) {
-          continue; // Duplicate signature
+          continue;
         }
 
-        // Determine currency and fees
         const currency = (order.currencyCode || order.currency || "USD").toUpperCase();
         let fee = 0.0;
         if (Array.isArray(order.taxes)) {
           fee = order.taxes.reduce((sum, t) => sum + (parseFloat(t.fillCost) || 0.0), 0.0);
         }
 
-        // Construct standard row matching the sheet columns
         const newRow = new Array(headers.length).fill("");
         newRow[colIndex.date] = execDate;
         newRow[colIndex.type] = isBuy ? "BUY" : "SELL";
@@ -269,7 +244,6 @@ function syncTrading212Orders() {
         allInPageAlreadyKnown = false;
       }
 
-      // If every order on this page was already indexed, we have caught up
       if (allInPageAlreadyKnown && items.length > 0) {
         break;
       }
@@ -279,7 +253,6 @@ function syncTrading212Orders() {
 
     // 4. Append new trades to the sheet
     if (newTrades.length > 0) {
-      // Sort newly fetched trades chronologically ascending before appending
       newTrades.sort((a, b) => (a[colIndex.date] > b[colIndex.date] ? 1 : -1));
 
       const startRow = sheet.getLastRow() + 1;
@@ -288,8 +261,8 @@ function syncTrading212Orders() {
 
       Logger.log(`Successfully added ${newTrades.length} new Trading 212 trades.`);
 
-      // 5. Auto-export to Drive CSV so Ghostfolio ingestion is immediately up to date
-      exportToDriveCSV();
+      // 5. Auto-export to Drive CSV using your existing function!
+      autoExportToCSV();
 
       const msg = `Added ${newTrades.length} new trades from Trading 212.\nExported latest portfolio_docker_sync.csv to Google Drive.`;
       Logger.log(msg);
@@ -312,69 +285,28 @@ function syncTrading212Orders() {
 }
 
 /**
- * Main trigger function to export the first tab to portfolio_docker_sync.csv in Google Drive.
- * Can be called manually or bound to an installable trigger.
+ * Exports the active sheet data to portfolio_docker_sync.csv in Google Drive root.
  */
-function exportToDriveCSV() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) {
-    Logger.log("No active spreadsheet found.");
-    return;
+function autoExportToCSV() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  var data = sheet.getDataRange().getValues();
+  var csvContent = "";
+  
+  for (var i = 0; i < data.length; i++) {
+    csvContent += data[i].join(",") + "\n";
   }
-
-  // Always read the first tab as per requirement
-  const sheet = ss.getSheets()[0];
-  const range = sheet.getDataRange();
-  const values = range.getValues();
-
-  if (!values || values.length === 0) {
-    Logger.log("Spreadsheet is empty. Nothing to export.");
-    return;
-  }
-
-  const timeZone = ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone();
-  const csvRows = [];
-
-  for (let r = 0; r < values.length; r++) {
-    const row = values[r];
-
-    // Skip trailing blank rows
-    const isBlank = row.every(cell => cell === "" || cell === null || cell === undefined);
-    if (isBlank) continue;
-
-    const formattedRow = row.map(cell => {
-      if (cell === null || cell === undefined) {
-        return "";
-      }
-
-      // If the cell contains a native Date object, format it as ISO YYYY-MM-DD
-      if (cell instanceof Date) {
-        return Utilities.formatDate(cell, timeZone, "yyyy-MM-dd");
-      }
-
-      let text = cell.toString().trim();
-
-      // Escape quotes and wrap with quotes if comma, newline, or quote exists (RFC 4180 standard)
-      if (text.includes('"') || text.includes(',') || text.includes('\n') || text.includes('\r')) {
-        text = '"' + text.replace(/"/g, '""') + '"';
-      }
-      return text;
-    });
-
-    csvRows.push(formattedRow.join(","));
-  }
-
-  const csvContent = csvRows.join("\r\n");
-
-  // Save or update file in Google Drive
-  const existingFiles = DriveApp.getFilesByName(SYNC_FILE_NAME);
-
-  if (existingFiles.hasNext()) {
-    const file = existingFiles.next();
-    file.setContent(csvContent);
-    Logger.log(`Updated existing file: ${SYNC_FILE_NAME} (ID: ${file.getId()})`);
+  
+  var fileName = "portfolio_docker_sync.csv";
+  var files = DriveApp.getFilesByName(fileName);
+  
+  if (files.hasNext()) {
+    files.next().setContent(csvContent);
   } else {
-    const file = DriveApp.createFile(SYNC_FILE_NAME, csvContent, MimeType.CSV);
-    Logger.log(`Created new file: ${SYNC_FILE_NAME} (ID: ${file.getId()})`);
+    DriveApp.createFile(fileName, csvContent, MimeType.CSV);
   }
+}
+
+// Backward compatibility alias
+function exportToDriveCSV() {
+  autoExportToCSV();
 }

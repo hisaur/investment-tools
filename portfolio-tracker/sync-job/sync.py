@@ -238,6 +238,25 @@ def normalize_symbol_for_ghostfolio(symbol: str) -> str:
     return sym
 
 
+def normalize_currency_for_symbol(symbol: str, raw_currency: str) -> str:
+    """
+    Ensures that US/EU stocks are not misattributed to cash wallet currencies like AUD.
+    Trading 212 instruments trade natively in USD, EUR, or GBP, never AUD.
+    """
+    curr = (raw_currency or "").strip().upper()
+    s = (symbol or "").strip().upper()
+
+    if s.endswith(".DE") or s.endswith(".AS") or s.endswith(".PA") or s.endswith("D_EQ") or s.endswith("A_EQ") or s.endswith("P_EQ"):
+        return "EUR"
+    if s.endswith(".L") or s.endswith("L_EQ"):
+        return "GBP"
+
+    if curr == "AUD" or not curr:
+        return "USD"
+
+    return curr
+
+
 def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Reads the CSV file from local disk and transforms records into Ghostfolio activities schema.
@@ -285,7 +304,7 @@ def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict
                 quantity = abs(float(raw_quantity))
                 unit_price = abs(float(raw_unit_price))
                 fee = abs(float(raw_fee)) if raw_fee else 0.0
-                currency = raw_currency.upper()
+                currency = normalize_currency_for_symbol(symbol, raw_currency)
 
                 activity: Dict[str, Any] = {
                     "currency": currency,

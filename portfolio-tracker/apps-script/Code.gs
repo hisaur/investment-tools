@@ -347,12 +347,13 @@ function syncTrading212Orders() {
         // Currency
         const currency = String(orderObj.currency || fillObj.currency || item.currencyCode || item.currency || defaultCurrency).toUpperCase();
 
-        // Fees / Taxes
+        // Fees / Taxes (Ghostfolio requires fee >= 0)
         let fee = 0.0;
         const taxes = walletObj.taxes || item.taxes;
         if (Array.isArray(taxes)) {
-          fee = taxes.reduce((sum, t) => sum + (parseFloat(t.fillCost || t.quantity || 0.0) || 0.0), 0.0);
+          fee = taxes.reduce((sum, t) => sum + Math.abs(parseFloat(t.fillCost || t.quantity || 0.0) || 0.0), 0.0);
         }
+        fee = Math.abs(fee);
 
         // Build standard row
         const newRow = new Array(headers.length).fill("");

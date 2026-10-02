@@ -204,6 +204,40 @@ def get_default_account_id(url: str, token: str) -> Optional[str]:
     return None
 
 
+def normalize_symbol_for_ghostfolio(symbol: str) -> str:
+    """
+    Normalizes ticker symbols for Ghostfolio / Yahoo Finance compatibility.
+    Handles Trading 212 European exchange codes and corporate actions.
+    """
+    if not symbol:
+        return ""
+    sym = symbol.strip().upper()
+
+    # Known ticker renames / corporate actions
+    if sym == "ANTM":
+        return "ELV"
+
+    # European exchange suffixes from Trading 212
+    if sym.endswith("D_EQ"):
+        # German Xetra / Frankfurt (e.g. AMDD_EQ -> AMD.DE, MSFD_EQ -> MSF.DE)
+        return sym[:-4] + ".DE"
+    if sym.endswith("A_EQ"):
+        # Euronext Amsterdam (e.g. ADYENA_EQ -> ADYEN.AS, ASMLA_EQ -> ASML.AS)
+        return sym[:-4] + ".AS"
+    if sym.endswith("P_EQ"):
+        # Euronext Paris (e.g. VIEP_EQ -> VIE.PA)
+        return sym[:-4] + ".PA"
+    if sym.endswith("L_EQ"):
+        # London Stock Exchange (e.g. VODL_EQ -> VOD.L)
+        return sym[:-4] + ".L"
+    if sym.endswith("_US_EQ"):
+        return sym[:-6]
+    if sym.endswith("_EQ"):
+        return sym[:-3]
+
+    return sym
+
+
 def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Reads the CSV file from local disk and transforms records into Ghostfolio activities schema.
@@ -247,10 +281,10 @@ def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict
             try:
                 parsed_date = parse_date_to_ghostfolio_iso(raw_date)
                 activity_type = raw_type.upper()
-                symbol = raw_symbol.upper()
-                quantity = float(raw_quantity)
-                unit_price = float(raw_unit_price)
-                fee = float(raw_fee) if raw_fee else 0.0
+                symbol = normalize_symbol_for_ghostfolio(raw_symbol)
+                quantity = abs(float(raw_quantity))
+                unit_price = abs(float(raw_unit_price))
+                fee = abs(float(raw_fee)) if raw_fee else 0.0
                 currency = raw_currency.upper()
 
                 activity: Dict[str, Any] = {
@@ -282,6 +316,7 @@ def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict
 def push_to_ghostfolio(url: str, token: str, activities: List[Dict[str, Any]]) -> bool:
     """
     POSTs activities array to Ghostfolio /api/v1/import endpoint.
+    Includes resilient fallback for item-by-item ingestion on batch failure.
     """
     if not activities:
         logger.info("No activities found in CSV to import.")
@@ -312,11 +347,40 @@ def push_to_ghostfolio(url: str, token: str, activities: List[Dict[str, Any]]) -
         elif resp.status_code == 400:
             response_json = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text
             logger.warning(
-                f"Ghostfolio responded with HTTP 400 Bad Request: {response_json}. "
-                "This typically occurs if duplicate transactions are detected (IS_DUPLICATE) "
-                "or if symbol/currency validation failed."
+                f"Ghostfolio responded with HTTP 400 Bad Request on batch import: {response_json}. "
+                "Initiating resilient item-by-item fallback..."
             )
-            return False
+            success_count = 0
+            skipped_count = 0
+            for idx, act in enumerate(activities, 1):
+                try:
+                    # Attempt individual import
+                    item_resp = requests.post(import_url, json={"activities": [act]}, headers=headers, timeout=15)
+                    if item_resp.status_code in (200, 201):
+                        success_count += 1
+                        continue
+
+                    # If Yahoo Finance failed to resolve ticker, fallback to MANUAL dataSource
+                    if act.get("dataSource") != "MANUAL":
+                        fallback_act = dict(act)
+                        fallback_act["dataSource"] = "MANUAL"
+                        # Ghostfolio requires manual symbols to start with 'GF_' or be a UUID
+                        clean_sym = act.get('symbol', 'UNKNOWN').replace('.', '_').replace('-', '_')
+                        fallback_act["symbol"] = f"GF_{clean_sym}"
+                        item_resp = requests.post(import_url, json={"activities": [fallback_act]}, headers=headers, timeout=15)
+                        if item_resp.status_code in (200, 201):
+                            logger.info(f"Imported activity {idx}/{len(activities)} ({act.get('symbol')} as {fallback_act['symbol']}) using MANUAL data source fallback.")
+                            success_count += 1
+                            continue
+
+                    skipped_count += 1
+                    logger.warning(f"Could not import activity {idx}/{len(activities)} ({act.get('symbol')} on {act.get('date')}): HTTP {item_resp.status_code} - {item_resp.text}")
+                except Exception as ex:
+                    skipped_count += 1
+                    logger.warning(f"Error importing activity {idx}/{len(activities)} ({act.get('symbol')}): {ex}")
+
+            logger.info(f"Resilient import completed: {success_count} activities imported, {skipped_count} skipped.")
+            return success_count > 0
         elif resp.status_code == 401:
             logger.error("HTTP 401 Unauthorized: Invalid or expired GHOSTFOLIO_BEARER_TOKEN.")
             return False

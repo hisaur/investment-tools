@@ -110,6 +110,8 @@ def fetch_historical_orders(
     while next_path and page < max_pages:
         page += 1
         url = next_path if next_path.startswith("http") else f"{base_url}{next_path}"
+        if url.startswith("http://"):
+            url = "https://" + url[7:]
         req = urllib.request.Request(url, headers=headers)
 
         try:

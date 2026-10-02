@@ -221,7 +221,11 @@ function syncTrading212Orders() {
   try {
     while (nextPath && pageCount < maxPages) {
       pageCount++;
-      const url = nextPath.startsWith("http") ? nextPath : `${baseUrl}${nextPath}`;
+      let url = nextPath.startsWith("http") ? nextPath : `${baseUrl}${nextPath}`;
+      // Enforce TLS/HTTPS encryption - never transmit credentials over plain HTTP
+      if (url.startsWith("http://")) {
+        url = url.replace(/^http:\/\//i, "https://");
+      }
       const response = UrlFetchApp.fetch(url, {
         method: "GET",
         headers: {

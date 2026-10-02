@@ -240,17 +240,23 @@ def normalize_symbol_for_ghostfolio(symbol: str) -> str:
 
 def normalize_currency_for_symbol(symbol: str, raw_currency: str) -> str:
     """
-    Ensures that US/EU stocks are not misattributed to cash wallet currencies like AUD.
-    Trading 212 instruments trade natively in USD, EUR, or GBP, never AUD.
+    Ensures that US/EU stocks are not misattributed to cash wallet currencies like AUD,
+    while preserving genuine cash holdings (e.g. AUD cash savings, USD cash deposits).
     """
     curr = (raw_currency or "").strip().upper()
     s = (symbol or "").strip().upper()
 
+    # Genuine Cash, Savings, or Liquidity accounts
+    if any(k in s for k in ("CASH", "HYSA", "SAVINGS", "DEPOSIT")) or s in ("AUD", "USD", "EUR", "GBP"):
+        return curr or "AUD"
+
+    # European equities
     if s.endswith(".DE") or s.endswith(".AS") or s.endswith(".PA") or s.endswith("D_EQ") or s.endswith("A_EQ") or s.endswith("P_EQ"):
         return "EUR"
     if s.endswith(".L") or s.endswith("L_EQ"):
         return "GBP"
 
+    # US equities misattributed to T212 wallet currency
     if curr == "AUD" or not curr:
         return "USD"
 
@@ -285,6 +291,7 @@ def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict
             raw_currency = row.get("currency", "USD")
             raw_fee = row.get("fee", "0")
             raw_broker = row.get("broker", "")
+            raw_comment = row.get("comment") or row.get("notes") or row.get("interest") or row.get("rate") or ""
 
             # Skip empty rows
             if not raw_symbol and not raw_quantity:
@@ -306,19 +313,29 @@ def parse_csv_file(csv_path: str, account_id: Optional[str] = None) -> List[Dict
                 fee = abs(float(raw_fee)) if raw_fee else 0.0
                 currency = normalize_currency_for_symbol(symbol, raw_currency)
 
+                # Determine dataSource: manual for interest/cash positions or default
+                is_cash_or_interest = activity_type == "INTEREST" or any(k in symbol.upper() for k in ("CASH", "HYSA", "SAVINGS"))
+                data_source = "MANUAL" if is_cash_or_interest else GHOSTFOLIO_DEFAULT_DATA_SOURCE
+                final_symbol = f"GF_{symbol}" if (is_cash_or_interest and not symbol.startswith("GF_")) else symbol
+
                 activity: Dict[str, Any] = {
                     "currency": currency,
-                    "dataSource": GHOSTFOLIO_DEFAULT_DATA_SOURCE,
+                    "dataSource": data_source,
                     "date": parsed_date,
                     "fee": fee,
                     "quantity": quantity,
-                    "symbol": symbol,
+                    "symbol": final_symbol,
                     "type": activity_type,
                     "unitPrice": unit_price,
                 }
 
+                comment_parts = []
                 if raw_broker:
-                    activity["comment"] = f"Broker: {raw_broker}"
+                    comment_parts.append(f"Broker: {raw_broker}")
+                if raw_comment:
+                    comment_parts.append(raw_comment)
+                if comment_parts:
+                    activity["comment"] = " | ".join(comment_parts)
 
                 if account_id:
                     activity["accountId"] = account_id

@@ -156,6 +156,16 @@ def parse_csv_holdings(csv_path: str = DEFAULT_CSV_PATH) -> List[Dict[str, Any]]
                     sym = "013C.F"
                 elif sym in ("HOP_EQ", "HOP.PA", "HOP"):
                     sym = "HO.PA"
+                elif sym in ("ETH", "ETH-USD", "ETH/USD"):
+                    sym = "ETHUSD"
+                elif sym in ("USDE", "USDE-USD", "USDE/USD"):
+                    sym = "USDE29470USD"
+                elif sym in ("SUSDE", "SUSDE-USD", "SUSDE/USD"):
+                    sym = "SUSDEUSD"
+                elif sym in ("BTC", "BTC-USD", "BTC/USD"):
+                    sym = "BTCUSD"
+                elif sym in ("SOL", "SOL-USD", "SOL/USD"):
+                    sym = "SOLUSD"
                 ttype = (row.get("Type") or "BUY").strip().upper()
                 if not sym:
                     continue

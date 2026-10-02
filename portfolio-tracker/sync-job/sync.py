@@ -221,6 +221,18 @@ def normalize_symbol_for_ghostfolio(symbol: str) -> str:
     if sym in ("HOP_EQ", "HOP.PA", "HOP"):
         return "HO.PA"
 
+    # Crypto tickers (seamless mapping for Yahoo Finance)
+    if sym in ("ETH", "ETH-USD", "ETH/USD"):
+        return "ETHUSD"
+    if sym in ("BTC", "BTC-USD", "BTC/USD"):
+        return "BTCUSD"
+    if sym in ("SOL", "SOL-USD", "SOL/USD"):
+        return "SOLUSD"
+    if sym in ("USDE", "USDE-USD", "USDE/USD"):
+        return "USDE29470USD"
+    if sym in ("SUSDE", "SUSDE-USD", "SUSDE/USD"):
+        return "SUSDEUSD"
+
     # European exchange suffixes from Trading 212
     # P_EQ: Euronext Paris (e.g. VIEP_EQ -> VIE.PA)
     if sym.endswith("P_EQ"):
@@ -253,6 +265,10 @@ def normalize_currency_for_symbol(symbol: str, raw_currency: str) -> str:
     # Genuine Cash, Savings, or Liquidity accounts
     if any(k in s for k in ("CASH", "HYSA", "SAVINGS", "DEPOSIT")) or s in ("AUD", "USD", "EUR", "GBP"):
         return curr or "AUD"
+
+    # Crypto assets: preserve whatever currency the user bought in (AUD, USD, EUR, etc.)
+    if s in ("ETHUSD", "BTCUSD", "SOLUSD", "USDE29470USD", "SUSDEUSD") or any(k in s for k in ("ETH", "BTC", "SOL", "USDE")):
+        return curr or "USD"
 
     # European equities
     if (

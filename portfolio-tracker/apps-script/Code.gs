@@ -342,6 +342,16 @@ function syncTrading212Orders() {
           cleanSymbol = "013C.F";
         } else if (cleanSymbol === "HOP_EQ" || cleanSymbol === "HOP.PA" || cleanSymbol === "HOP") {
           cleanSymbol = "HO.PA";
+        } else if (cleanSymbol === "ETH" || cleanSymbol === "ETH-USD" || cleanSymbol === "ETH/USD") {
+          cleanSymbol = "ETHUSD";
+        } else if (cleanSymbol === "USDE" || cleanSymbol === "USDE-USD" || cleanSymbol === "USDE/USD") {
+          cleanSymbol = "USDE29470USD";
+        } else if (cleanSymbol === "SUSDE" || cleanSymbol === "SUSDE-USD" || cleanSymbol === "SUSDE/USD") {
+          cleanSymbol = "SUSDEUSD";
+        } else if (cleanSymbol === "BTC" || cleanSymbol === "BTC-USD" || cleanSymbol === "BTC/USD") {
+          cleanSymbol = "BTCUSD";
+        } else if (cleanSymbol === "SOL" || cleanSymbol === "SOL-USD" || cleanSymbol === "SOL/USD") {
+          cleanSymbol = "SOLUSD";
         } else if (cleanSymbol.endsWith("P_EQ")) {
           cleanSymbol = cleanSymbol.slice(0, -4) + ".PA";
         } else if (cleanSymbol.endsWith("A_EQ")) {
